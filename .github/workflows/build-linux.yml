@@ -1,11 +1,11 @@
-name: 打包统信/麒麟 Linux 可执行文件
+name: 打包统信/麒麟 Linux 可执行文件（x86_64 + aarch64）
 
 on:
   push:
     branches: [ main ]
     paths-ignore:
       - '**.md'
-      - '**.txt'
+      - 'README*'
       - '使用说明.txt'
   workflow_dispatch:
 
@@ -14,48 +14,65 @@ permissions:
 
 jobs:
   build:
-    name: 构建 Linux amd64 可执行文件
-    # ubuntu-22.04 的 glibc 2.35 与统信 UOS 20 / 麒麟 V10 SP1 兼容
-    runs-on: ubuntu-22.04
+    name: 构建 ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置 Python 3.10
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
       - name: 安装系统依赖（Tk / 中文字体 / LibreOffice / CUPS）
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            python3-tk tk8.6-blt2.5 \
+            python3 python3-venv python3-pip python3-tk tk8.6-blt2.5 \
             fonts-noto-cjk fonts-wqy-microhei fonts-arphic-uming \
-            libreoffice-writer cups-client xdg-utils
+            libreoffice-writer cups-client xdg-utils file
 
-      - name: 安装 Python 依赖
+      - name: 确认目标架构
         run: |
-          python -m pip install --upgrade pip
-          # 3.10 兼容的纯净依赖集合（含打包器）
-          pip install "pdfplumber==0.11.0" "python-docx==1.1.0" \
+          echo "runner arch : $(uname -m)"
+          echo "target arch : ${{ matrix.arch }}"
+          python3 -c "import platform,sys; print('python:', sys.version.split()[0], platform.machine())"
+
+      - name: 创建虚拟环境并安装 Python 依赖
+        run: |
+          # 使用系统 Python 3.10（jammy 自带），--system-site-packages 复用 apt 安装的 _tkinter
+          python3 -m venv --system-site-packages .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install \
+            "pdfplumber==0.11.0" "python-docx==1.1.0" \
             "openpyxl>=3.1.0" "Pillow>=10.0.0" "ttkbootstrap>=1.10.1" \
             "PyPDF2>=3.0.0" "pypinyin>=0.50.0" "qrcode>=7.4.2" \
             "pyinstaller>=6.5.0"
 
       - name: 语法与导入校验
         run: |
-          python -m py_compile gui_app.py main.py database.py rule_engine.py \
-            rule_management_ui.py platform_compat.py
-          python -c "import platform_compat, main, database, rule_engine, rule_management_ui; print('模块导入通过')"
-          python -c "from PyPDF2 import PdfWriter; print('PdfWriter 可用')"
-          python -c "import tkinter; print('Tk', tkinter.TkVersion)"
+          .venv/bin/python -m py_compile gui_app.py main.py database.py \
+            rule_engine.py rule_management_ui.py platform_compat.py
+          .venv/bin/python -c "import platform_compat, main, database, rule_engine, rule_management_ui; print('模块导入通过')"
+          .venv/bin/python -c "from PyPDF2 import PdfWriter; print('PdfWriter 可用')"
+          .venv/bin/python -c "import tkinter, _tkinter; print('Tk', tkinter.TkVersion, '/ _tkinter OK')"
 
-      - name: PyInstaller 打包（onedir）
+      - name: PyInstaller 打包（onedir，原生架构）
         run: |
-          pyinstaller complaints-linux.spec --noconfirm
+          .venv/bin/python -m PyInstaller complaints-linux.spec --noconfirm
           chmod +x "dist/投诉批办单管理系统/投诉批办单管理系统"
+
+      - name: 校验产物为原生架构 ELF
+        run: |
+          file "dist/投诉批办单管理系统/投诉批办单管理系统"
+          file "dist/投诉批办单管理系统/_internal"/libpython*.so* 2>/dev/null || true
+          echo "--- 可执行文件架构 ---"
+          file "dist/投诉批办单管理系统/投诉批办单管理系统" | grep -E "ARM aarch64|x86-64" || true
 
       - name: 生成桌面入口与说明
         run: |
@@ -63,36 +80,62 @@ jobs:
           chmod +x "$OUT/投诉批办单管理系统"
           cp 启动GUI.sh "$OUT/启动GUI.sh"
           chmod +x "$OUT/启动GUI.sh"
+          cp 启动命令行.sh "$OUT/启动命令行.sh"
+          chmod +x "$OUT/启动命令行.sh"
           cp 投诉批办单管理系统.desktop "$OUT/投诉批办单管理系统.desktop"
           cp 使用说明.txt "$OUT/使用说明.txt"
           cp 1.png "$OUT/1.png"
+          echo "${{ matrix.arch }}" > "$OUT/AppData/构建架构.txt"
 
       - name: 打包为 tar.gz 发布件
         run: |
           cd dist
-          tar -czf "complaints-linux-x86_64.tar.gz" "投诉批办单管理系统"
-          sha256sum "complaints-linux-x86_64.tar.gz" > "complaints-linux-x86_64.tar.gz.sha256"
+          tar -czf "complaints-linux-${{ matrix.arch }}.tar.gz" "投诉批办单管理系统"
+          sha256sum "complaints-linux-${{ matrix.arch }}.tar.gz" > "complaints-linux-${{ matrix.arch }}.tar.gz.sha256"
           ls -lh
 
       - name: 上传构建产物（Artifacts）
         uses: actions/upload-artifact@v4
         with:
-          name: complaints-linux-x86_64
+          name: complaints-linux-${{ matrix.arch }}
           path: |
-            dist/complaints-linux-x86_64.tar.gz
-            dist/complaints-linux-x86_64.tar.gz.sha256
+            dist/complaints-linux-${{ matrix.arch }}.tar.gz
+            dist/complaints-linux-${{ matrix.arch }}.tar.gz.sha256
           if-no-files-found: error
 
+  release:
+    name: 汇总双架构产物并发布 Release
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 下载两个架构的构建产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: complaints-linux-*
+          merge-multiple: true
+          path: dist
+
+      - name: 列出发布件
+        run: ls -lh dist
+
       - name: 创建 GitHub Release
-        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: linux-v${{ github.run_number }}
-          name: 统信/麒麟 Linux 版 v${{ github.run_number }}
+          name: 统信/麒麟 Linux 版 v${{ github.run_number }}（x86_64 + aarch64）
           body: |
-            自动构建：统信 UOS / 麒麟 Kylin V10（x86_64）可执行文件。
-            下载 complaints-linux-x86_64.tar.gz 并解压，运行 `./启动GUI.sh` 或 `./投诉批办单管理系统`。
+            自动构建：统信 UOS / 麒麟 Kylin V10 可执行文件，两个架构各自原生打包。
+
+            - x86_64（Intel/AMD、兆芯、海光）：complaints-linux-x86_64.tar.gz
+            - aarch64（飞腾、鲲鹏、麒麟芯、瑞芯微）：complaints-linux-aarch64.tar.gz
+
+            请按 `uname -m` 的结果选择对应包：输出 x86_64 用前者，输出 aarch64 用后者。
+            解压后运行 `./启动GUI.sh` 或 `./投诉批办单管理系统`。
+
             系统需预装 libreoffice-writer、cups-client 与 fonts-noto-cjk。
+            构建基线为 Ubuntu 22.04（glibc 2.35）；更老的系统请改用源码方式运行
+            （`python3 -m pip install -r requirements-linux.txt && ./启动GUI.sh`），
+            源码为纯 Python，与 CPU 架构无关。
           files: |
             dist/*.tar.gz
             dist/*.sha256

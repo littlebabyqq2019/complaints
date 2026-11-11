@@ -8,34 +8,52 @@
 
 ### 1. 直接运行 GitHub Actions 打包出的可执行文件（推荐）
 
-在 [Releases](https://github.com/littlebabyqq2019/complaints/releases) 下载
-`complaints-linux-x86_64.tar.gz`，解压后：
+在 [Releases](https://github.com/littlebabyqq2019/complaints/releases) 下载**与 CPU 架构对应的包**。
+先在终端执行 `uname -m` 判断架构：
+
+| `uname -m` 输出 | 下载文件 | 适用 CPU |
+| --- | --- | --- |
+| `x86_64` | `complaints-linux-x86_64.tar.gz` | Intel / AMD、兆芯、海光 |
+| `aarch64` | `complaints-linux-aarch64.tar.gz` | 飞腾、鲲鹏、麒麟芯、瑞芯微等 arm64 国产 CPU |
+
+两个包**不能混用**：包内 ELF 可执行文件和 `_internal` 下的 `.so` 是对应架构的原生机器码。
+GitHub Actions 用 `ubuntu-22.04` 与 `ubuntu-22.04-arm` 两个原生 runner 分别构建。
 
 ```bash
+tar -xzf complaints-linux-aarch64.tar.gz
 cd 投诉批办单管理系统
 ./启动GUI.sh
 ```
 
-或直接双击 `投诉批办单管理系统` / `启动GUI.sh`。
+或直接双击 `投诉批办单管理系统` / `启动GUI.sh`。命令行批处理模式：`./启动命令行.sh`。
 
-### 2. 源码运行
+### 2. 源码运行（任意架构，含龙芯 LoongArch / 申威）
+
+源码为纯 Python，与 CPU 架构无关：
 
 ```bash
-sudo apt install python3 python3-tk python3-pip \
+sudo apt install python3 python3-tk python3-pip python3-venv \
                  fonts-noto-cjk fonts-wqy-microhei \
                  libreoffice-writer cups-client xdg-utils
 python3 -m pip install -r requirements-linux.txt
 ./启动GUI.sh
 ```
 
-命令行批处理模式：`./启动命令行.sh`（等价于 Windows 的 `python main.py`）。
+如需在目标架构上生成原生可执行文件（构建基线 glibc 2.35+）：
+
+```bash
+python3 -m pip install -r requirements-linux.txt
+python3 -m PyInstaller complaints-linux.spec --noconfirm
+chmod +x "dist/投诉批办单管理系统/投诉批办单管理系统"
+```
 
 ## 二、系统要求
 
 | 项目 | 要求 |
 | --- | --- |
-| 操作系统 | 统信 UOS 20+ / 麒麟 Kylin V10 SP1+（x86_64 或 aarch64） |
-| 架构 | amd64 构建件适用于 x86_64；飞腾/鲲鹏等 aarch64 机器请在对应架构上重新执行 `pyinstaller complaints-linux.spec` |
+| 操作系统 | 统信 UOS 20+ / 麒麟 Kylin V10 SP1+，x86_64 或 aarch64 |
+| glibc | ≥ 2.35（Ubuntu 22.04 构建基线）；更老系统请用源码方式 |
+| 架构 | 每个架构单独原生打包，见上表 |
 | 图形 | X11 / Wayland + Tk 8.6（python3-tk） |
 | 中文字体 | fonts-noto-cjk / 文泉驿 / AR PL UMing，缺失时界面自动回退 |
 | Word 转换与打印 | libreoffice-writer（或 WPS）+ cups-client 的 `lp` 命令 |
@@ -78,20 +96,24 @@ python3 -m pip install -r requirements-linux.txt
 
 ## 五、打包（GitHub Actions）
 
-推送到 `main` 分支即自动触发 `.github/workflows/build-linux.yml`：
+推送到 `main` 分支即自动触发 `.github/workflows/build-linux.yml`，用 matrix 并行构建两个架构：
 
-1. `py_compile` + 全模块导入校验
-2. `pyinstaller complaints-linux.spec --noconfirm`（onedir）
-3. 生成 `.desktop`、`启动GUI.sh`、`使用说明.txt`
-4. 打成 `complaints-linux-x86_64.tar.gz` 并计算 SHA-256
-5. 上传 Artifacts 并创建 Release
+1. `ubuntu-22.04`（x86_64）与 `ubuntu-22.04-arm`（aarch64）原生 runner 各跑一遍
+2. 装 Tk / 中文字体 / LibreOffice / CUPS，用系统 Python 3.10 + venv 装依赖
+3. `py_compile` + 全模块导入 + `_tkinter` 校验
+4. `python -m PyInstaller complaints-linux.spec --noconfirm`（onedir，本机原生架构）
+5. 用 `file` 校验产物 ELF 架构，生成 `.desktop`、`启动GUI.sh`、`使用说明.txt`
+6. 分别打成 `complaints-linux-x86_64.tar.gz` 与 `complaints-linux-aarch64.tar.gz` 并计算 SHA-256
+7. `release` job 汇总两个 Artifacts，创建含双架构资产的 Release
 
-本地手动打包：
+本地手动打包（在目标架构机器上执行，产物即该架构原生可执行文件）：
 
 ```bash
-python3 -m pip install -r requirements-linux.txt
-pyinstaller complaints-linux.spec --noconfirm
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install -r requirements-linux.txt
+.venv/bin/python -m PyInstaller complaints-linux.spec --noconfirm
 chmod +x "dist/投诉批办单管理系统/投诉批办单管理系统"
+file "dist/投诉批办单管理系统/投诉批办单管理系统"   # 确认 ARM aarch64 / x86-64
 ```
 
 ## 六、功能清单（与 Windows 版一致）
