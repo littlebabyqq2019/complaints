@@ -9,7 +9,7 @@
 ### 1. 直接运行 GitHub Actions 打包出的可执行文件（推荐）
 
 在 [Releases](https://github.com/littlebabyqq2019/complaints/releases) 下载
-`投诉批办单管理系统-Linux-x86_64.tar.gz`，解压后：
+`complaints-linux-x86_64.tar.gz`，解压后：
 
 ```bash
 cd 投诉批办单管理系统
@@ -83,7 +83,7 @@ python3 -m pip install -r requirements-linux.txt
 1. `py_compile` + 全模块导入校验
 2. `pyinstaller complaints-linux.spec --noconfirm`（onedir）
 3. 生成 `.desktop`、`启动GUI.sh`、`使用说明.txt`
-4. 打成 `投诉批办单管理系统-Linux-x86_64.tar.gz` 并计算 SHA-256
+4. 打成 `complaints-linux-x86_64.tar.gz` 并计算 SHA-256
 5. 上传 Artifacts 并创建 Release
 
 本地手动打包：

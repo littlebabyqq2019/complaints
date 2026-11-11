@@ -66,8 +66,8 @@ jobs:
       - name: 打包为 tar.gz 发布件
         run: |
           cd dist
-          tar -czf "投诉批办单管理系统-Linux-x86_64.tar.gz" "投诉批办单管理系统"
-          sha256sum "投诉批办单管理系统-Linux-x86_64.tar.gz" > "投诉批办单管理系统-Linux-x86_64.tar.gz.sha256"
+          tar -czf "complaints-linux-x86_64.tar.gz" "投诉批办单管理系统"
+          sha256sum "complaints-linux-x86_64.tar.gz" > "complaints-linux-x86_64.tar.gz.sha256"
           ls -lh
 
       - name: 上传构建产物（Artifacts）
@@ -75,8 +75,8 @@ jobs:
         with:
           name: complaints-linux-x86_64
           path: |
-            dist/投诉批办单管理系统-Linux-x86_64.tar.gz
-            dist/投诉批办单管理系统-Linux-x86_64.tar.gz.sha256
+            dist/complaints-linux-x86_64.tar.gz
+            dist/complaints-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
 
       - name: 创建 GitHub Release
@@ -87,7 +87,7 @@ jobs:
           name: 统信/麒麟 Linux 版 v${{ github.run_number }}
           body: |
             自动构建：统信 UOS / 麒麟 Kylin V10（x86_64）可执行文件。
-            解压后运行 `./投诉批办单管理系统` 或双击 `启动GUI.sh`。
+            下载 complaints-linux-x86_64.tar.gz 并解压，运行 `./启动GUI.sh` 或 `./投诉批办单管理系统`。
             系统需预装 libreoffice-writer、cups-client 与 fonts-noto-cjk。
           files: |
             dist/*.tar.gz
