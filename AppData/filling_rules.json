@@ -1,0 +1,411 @@
+{
+  "version": "2.0",
+  "last_updated": "2026-09-19",
+  "keywords": {
+    "dept_keywords": [
+      "中医院",
+      "医政",
+      "公卫",
+      "疾控",
+      "监督",
+      "发展",
+      "妇计",
+      "中医"
+    ],
+    "special_keywords": {
+      "title": [
+        "医托",
+        "表扬"
+      ],
+      "public_place": [
+        "酒店",
+        "宾馆",
+        "民宿",
+        "泳",
+        "理发",
+        "美发",
+        "健康证",
+        "卫生证",
+        "卫生许可证",
+        "浴",
+        "美甲",
+        "烟"
+      ]
+    }
+  },
+  "rules": {
+    "special_rules": [
+      {
+        "id": "special_yituo_yizheng",
+        "priority": 1,
+        "enabled": true,
+        "name": "医托-医政",
+        "description": "医托类投诉由医政科牵头办理",
+        "conditions": {
+          "file_title_contains": [
+            "医托"
+          ],
+          "filename_contains": [
+            "医政"
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅示，请高鹏同志亦阅。\n建议：请医政科牵头办理，及时移交线索并做好纠纷化解，请法监科联合公安、市场监管局组织集中打击，请疾控中心（监督所、健教所）严查严处。",
+          "办理结果": "信息中心已转医政科。"
+        }
+      },
+      {
+        "id": "special_yituo_zhongyi",
+        "priority": 1,
+        "enabled": true,
+        "name": "医托-中医",
+        "description": "医托类投诉由中医科牵头办理",
+        "conditions": {
+          "file_title_contains": [
+            "医托"
+          ],
+          "filename_contains": [
+            "中医"
+          ],
+          "filename_not_contains": [
+            "中医院"
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅示，请高鹏同志亦阅。\n建议：请中医科牵头办理，及时移交线索并做好纠纷化解，请法监科联合公安、市场监管局组织集中打击，请疾控中心（监督所、健教所）严查严处。",
+          "办理结果": "信息中心已转中医科。"
+        }
+      },
+      {
+        "id": "special_biaoyang",
+        "priority": 2,
+        "enabled": true,
+        "name": "表扬类",
+        "description": "表扬类投诉的拟办意见修正",
+        "conditions": {
+          "file_title_contains": [
+            "表扬"
+          ]
+        },
+        "modifier": {
+          "拟办意见": [
+            {
+              "action": "remove",
+              "text": "，请法监科亦阅"
+            },
+            {
+              "action": "replace",
+              "old": "妥处",
+              "new": "办理"
+            }
+          ]
+        }
+      },
+      {
+        "id": "special_public_place",
+        "priority": 3,
+        "enabled": true,
+        "name": "公共场所-疾控监督",
+        "description": "公共场所卫生投诉的拟办意见修正",
+        "conditions": {
+          "filename_contains_any": [
+            "疾控",
+            "监督"
+          ],
+          "file_title_contains_any": [
+            "酒店",
+            "宾馆",
+            "民宿",
+            "泳",
+            "理发",
+            "美发",
+            "健康证",
+            "卫生证",
+            "卫生许可证",
+            "浴",
+            "美甲",
+            "烟",
+            "洗脚"
+          ]
+        },
+        "modifier": {
+          "拟办意见": [
+            {
+              "action": "remove",
+              "text": "，请法监科亦阅"
+            }
+          ]
+        }
+      }
+    ],
+    "multi_dept_rules": [
+      {
+        "id": "multi_yizheng_jikong",
+        "priority": 10,
+        "enabled": true,
+        "name": "医政牵头+疾控配合",
+        "description": "医政科和疾控中心联合办理，医政牵头",
+        "conditions": {
+          "filename_contains_all": [
+            "医政",
+            "疾控"
+          ],
+          "order": [
+            "医政",
+            "疾控"
+          ],
+          "dept_keywords_order": [
+            [
+              "医政"
+            ],
+            [
+              "疾控"
+            ]
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅示，请高鹏同志亦阅。\n建议：请医政科牵头、疾控中心（监督所、健教所）配合办理，请法监科亦阅。",
+          "办理结果": "信息中心已转医政科、疾控中心（监督所、健教所）。"
+        }
+      },
+      {
+        "id": "multi_yizheng_jiandu",
+        "priority": 10,
+        "enabled": true,
+        "name": "医政牵头+监督配合",
+        "description": "医政科和监督所联合办理，医政牵头",
+        "conditions": {
+          "filename_contains_all": [
+            "医政",
+            "监督"
+          ],
+          "order": [
+            "医政",
+            "监督"
+          ],
+          "dept_keywords_order": [
+            [
+              "医政"
+            ],
+            [
+              "监督"
+            ]
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅示，请高鹏同志亦阅。\n建议：请医政科牵头、疾控中心（监督所、健教所）配合办理，请法监科亦阅。",
+          "办理结果": "信息中心已转医政科、疾控中心（监督所、健教所）。"
+        }
+      },
+      {
+        "id": "multi_jikong_yizheng",
+        "priority": 10,
+        "enabled": true,
+        "name": "疾控牵头+医政配合",
+        "description": "疾控中心和医政科联合办理，疾控牵头",
+        "conditions": {
+          "filename_contains_all": [
+            "疾控",
+            "医政"
+          ],
+          "order": [
+            "疾控",
+            "医政"
+          ],
+          "dept_keywords_order": [
+            [
+              "疾控"
+            ],
+            [
+              "医政"
+            ]
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅，请高鹏同志阅示。\n建议：请疾控中心（监督所、健教所）牵头、医政科配合办理，请法监科亦阅。",
+          "办理结果": "信息中心已转疾控中心（监督所、健教所）、医政科。"
+        }
+      },
+      {
+        "id": "multi_jiandu_yizheng",
+        "priority": 10,
+        "enabled": true,
+        "name": "监督牵头+医政配合",
+        "description": "监督所和医政科联合办理，监督牵头",
+        "conditions": {
+          "filename_contains_all": [
+            "监督",
+            "医政"
+          ],
+          "order": [
+            "监督",
+            "医政"
+          ],
+          "dept_keywords_order": [
+            [
+              "监督"
+            ],
+            [
+              "医政"
+            ]
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅，请高鹏同志阅示。\n建议：请疾控中心（监督所、健教所）牵头、医政科配合办理，请法监科亦阅。",
+          "办理结果": "信息中心已转疾控中心（监督所、健教所）、医政科。"
+        }
+      }
+    ],
+    "single_dept_rules": [
+      {
+        "id": "single_zhongyiyuan",
+        "priority": 20,
+        "enabled": true,
+        "name": "中医医院",
+        "description": "中医医院相关投诉",
+        "conditions": {
+          "filename_contains": [
+            "中医院"
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅，请高鹏同志阅示。\n建议：请中医医院妥处。",
+          "办理结果": "信息中心已转中医医院。"
+        }
+      },
+      {
+        "id": "single_yizheng",
+        "priority": 21,
+        "enabled": true,
+        "name": "医政科",
+        "description": "医政科相关投诉",
+        "conditions": {
+          "filename_contains": [
+            "医政"
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅示。\n建议：请医政科妥处，请法监科亦阅。",
+          "办理结果": "信息中心已转医政科。"
+        }
+      },
+      {
+        "id": "single_gongwei",
+        "priority": 21,
+        "enabled": true,
+        "name": "公卫科",
+        "description": "公卫科相关投诉",
+        "conditions": {
+          "filename_contains": [
+            "公卫"
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅示。\n建议：请公卫科妥处，请法监科亦阅。",
+          "办理结果": "信息中心已转公卫科。"
+        }
+      },
+      {
+        "id": "single_zhongyi",
+        "priority": 22,
+        "enabled": true,
+        "name": "中医科",
+        "description": "中医科相关投诉",
+        "conditions": {
+          "filename_contains": [
+            "中医"
+          ],
+          "filename_not_contains": [
+            "中医院"
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅示。\n建议：请中医科妥处，请法监科亦阅。",
+          "办理结果": "信息中心已转中医科。"
+        }
+      },
+      {
+        "id": "single_jikong",
+        "priority": 21,
+        "enabled": true,
+        "name": "疾控中心",
+        "description": "疾控中心相关投诉",
+        "conditions": {
+          "filename_contains": [
+            "疾控"
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅，请高鹏同志阅示。\n建议：请疾控中心（监督所、健教所）妥处，请法监科亦阅。",
+          "办理结果": "信息中心已转疾控中心（监督所、健教所）。"
+        }
+      },
+      {
+        "id": "single_jiandu",
+        "priority": 21,
+        "enabled": true,
+        "name": "监督所",
+        "description": "监督所相关投诉",
+        "conditions": {
+          "filename_contains": [
+            "监督"
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅，请高鹏同志阅示。\n建议：请疾控中心（监督所、健教所）妥处，请法监科亦阅。",
+          "办理结果": "信息中心已转疾控中心（监督所、健教所）。"
+        }
+      },
+      {
+        "id": "single_fazhan",
+        "priority": 21,
+        "enabled": true,
+        "name": "家庭发展科",
+        "description": "家庭发展科相关投诉",
+        "conditions": {
+          "filename_contains": [
+            "发展"
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅示。\n建议：请家庭发展科妥处。",
+          "办理结果": "信息中心已转家庭发展科。"
+        }
+      },
+      {
+        "id": "single_fuji",
+        "priority": 21,
+        "enabled": true,
+        "name": "妇计中心",
+        "description": "妇计中心相关投诉",
+        "conditions": {
+          "filename_contains": [
+            "妇计"
+          ]
+        },
+        "output": {
+          "拟办意见": "请吕宁同志阅，请高鹏同志阅示。\n建议：请妇计中心妥处。",
+          "办理结果": "信息中心已转妇计中心。"
+        }
+      }
+    ],
+    "title_modifiers": [
+      {
+        "id": "modifier_chongban",
+        "enabled": true,
+        "name": "重办标记",
+        "description": "为重办投诉在标题末尾添加（重办）标记",
+        "conditions": {
+          "filename_contains": [
+            "重办"
+          ]
+        },
+        "action": {
+          "field": "文件标题",
+          "type": "append_if_not_exists",
+          "text": "（重办）"
+        }
+      }
+    ]
+  }
+}

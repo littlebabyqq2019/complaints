@@ -1,0 +1,12 @@
+{
+    "initial_delay_seconds": 15,
+    "retry_delay_seconds": 8,
+    "max_retries": 5,
+    "description": "打印后文件删除延迟配置",
+    "instructions": {
+        "initial_delay_seconds": "打印后首次尝试删除文件的延迟时间（秒）",
+        "retry_delay_seconds": "删除失败后重试的间隔时间（秒）",
+        "max_retries": "最大重试次数",
+        "note": "如果电脑较慢或打印机响应慢，可以适当增加延迟时间"
+    }
+}

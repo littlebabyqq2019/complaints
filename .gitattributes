@@ -1,0 +1,12 @@
+# 统一仓库内换行为 LF，保证 .sh / .desktop / workflow 在统信/麒麟上可直接执行
+* text=auto eol=lf
+
+# 二进制资源不做换行转换
+*.png binary
+*.ico binary
+*.docx binary
+*.doc  binary
+*.db   binary
+*.pyc  binary
+*.zip  binary
+*.exe  binary

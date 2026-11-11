@@ -1,0 +1,12 @@
+{
+  "enabled": false,
+  "size": "small",
+  "fields": {
+    "收文编号": true,
+    "收文日期": false,
+    "来文字号": false,
+    "来文单位": false,
+    "收文途径": false,
+    "文件标题": false
+  }
+}

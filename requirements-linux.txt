@@ -1,0 +1,11 @@
+# 统信 UOS / 麒麟 Kylin V10 运行与打包依赖
+# 图形界面由系统 Tk 提供（python3-tk / tk8.6），pip 安装部分如下：
+pdfplumber==0.11.0
+python-docx==1.1.0
+openpyxl>=3.1.0
+Pillow>=10.0.0
+ttkbootstrap>=1.10.1
+PyPDF2>=3.0.0
+pypinyin>=0.50.0
+qrcode>=7.4.2
+pyinstaller>=6.5.0

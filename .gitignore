@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# PyInstaller / 旧版 Windows 打包产物
+build/
+dist/
+*.pkg
+*.exe
+
+# 业务数据目录（含示例/已处理工单，属用户数据，不入库）
+待处理/
+待打印/
+已打印/
+已处理/
+示例/
+
+# 运行期日志与数据库临时文件
+*.log
+AppData/app_startup.log
+AppData/*.db-journal
+AppData/*.db-wal
+AppData/*.db-shm
+AppData/*.backup_*
+
+# 诊断/临时脚本产物
+.merkle-snapshot.json
+~$*
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
