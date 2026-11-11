@@ -3,6 +3,10 @@ name: 打包统信/麒麟 Linux 可执行文件
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - '**.txt'
+      - '使用说明.txt'
   workflow_dispatch:
 
 permissions:
