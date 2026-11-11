@@ -1,0 +1,13 @@
+投诉批办单管理系统（统信 UOS / 麒麟 Kylin V10）
+
+运行：双击「投诉批办单管理系统」或「启动GUI.sh」，也可终端执行：
+    ./投诉批办单管理系统
+
+系统要求：
+  - x86_64 或 aarch64 国产 Linux（统信 UOS 20+、麒麟 V10 SP1+）
+  - 已安装 libreoffice-writer（Word 转 PDF / .doc 读取 / 打印前转换）
+  - 已安装 cups-client 并配置好打印机（lp 命令）
+  - 已安装中文字体 fonts-noto-cjk（界面与文档显示）
+
+数据与配置保存在程序目录下的 AppData/ 中，
+待打印 / 已打印 / 已处理 三个目录与程序同级，与 Windows 版一致。
