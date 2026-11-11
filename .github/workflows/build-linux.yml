@@ -85,7 +85,7 @@ jobs:
           cp 投诉批办单管理系统.desktop "$OUT/投诉批办单管理系统.desktop"
           cp 使用说明.txt "$OUT/使用说明.txt"
           cp 1.png "$OUT/1.png"
-          echo "${{ matrix.arch }}" > "$OUT/AppData/构建架构.txt"
+          echo "${{ matrix.arch }}" > "$OUT/构建架构.txt"
 
       - name: 打包为 tar.gz 发布件
         run: |
