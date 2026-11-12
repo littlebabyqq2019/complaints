@@ -10,7 +10,9 @@ import sys
 import json
 import tkinter as tk
 from tkinter import messagebox, filedialog, scrolledtext, simpledialog
-import ttkbootstrap as ttk
+# ttkbootstrap 1.x / 2.x 兼容入口：2.x 去掉了驼峰别名 ttk.PanedWindow（改叫
+# Panedwindow），老代码会 AttributeError 启动失败；ttk_compat 在导入时补齐别名。
+from ttk_compat import ttk
 from ttkbootstrap.constants import *
 from datetime import datetime
 import threading
@@ -52,7 +54,7 @@ class InputHistoryManager:
         """加载历史记录"""
         try:
             if os.path.exists(self.history_file):
-                with open(self.history_file, 'r', encoding='utf-8') as f:
+                with open(self.history_file, 'r', encoding='utf-8-sig') as f:
                     self.history_data = json.load(f)
         except Exception as e:
             print(f"加载输入历史失败: {e}")
@@ -659,7 +661,7 @@ class ComplaintManagementGUI:
         # 1. 尝试加载上次使用的数据库
         if os.path.exists(last_db_config):
             try:
-                with open(last_db_config, 'r', encoding='utf-8') as f:
+                with open(last_db_config, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
                     last_db = data.get('last_database', '')
                 # 兼容 Windows 版遗留配置里的反斜杠路径（UOS/麒麟不做路径分隔符解析）
@@ -714,7 +716,7 @@ class ComplaintManagementGUI:
         
         try:
             if os.path.exists(config_file):
-                with open(config_file, 'r', encoding='utf-8') as f:
+                with open(config_file, 'r', encoding='utf-8-sig') as f:
                     return json.load(f)
         except Exception as e:
             print(f"加载路径配置失败: {e}")
@@ -1341,12 +1343,28 @@ class ComplaintManagementGUI:
         self.status_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=3)
         
     def log(self, message):
-        """添加日志"""
+        """添加日志（界面尚未建好时只写控制台，避免启动阶段的二次异常掩盖真正原因）"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_message = f"[{timestamp}] {message}\n"
-        self.log_text.insert(tk.END, log_message)
-        self.log_text.see(tk.END)
-        self.status_bar.config(text=message)
+        log_message = f"[{timestamp}] {message}"
+        log_text = getattr(self, 'log_text', None)
+        if log_text is None:
+            # 界面还没建好（启动早期）：只打到控制台，绝不因为控件缺失再抛一次异常
+            try:
+                print(log_message)
+            except Exception:
+                pass
+            return
+        try:
+            log_text.insert(tk.END, log_message + "\n")
+            log_text.see(tk.END)
+        except Exception:
+            pass
+        status_bar = getattr(self, 'status_bar', None)
+        if status_bar is not None:
+            try:
+                status_bar.config(text=message)
+            except Exception:
+                pass
         
     def refresh_file_list(self):
         """刷新待打印文件列表"""
@@ -1885,7 +1903,7 @@ class ComplaintManagementGUI:
         # 尝试从文件加载配置
         try:
             if os.path.exists(config_file):
-                with open(config_file, 'r', encoding='utf-8') as f:
+                with open(config_file, 'r', encoding='utf-8-sig') as f:
                     config = json.load(f)
                 return config
         except Exception as e:
@@ -1933,7 +1951,7 @@ class ComplaintManagementGUI:
         # 尝试从文件加载配置
         try:
             if os.path.exists(config_file):
-                with open(config_file, 'r', encoding='utf-8') as f:
+                with open(config_file, 'r', encoding='utf-8-sig') as f:
                     config = json.load(f)
                 return config
         except Exception as e:
@@ -1972,7 +1990,7 @@ class ComplaintManagementGUI:
         
         try:
             if os.path.exists(config_file):
-                with open(config_file, 'r', encoding='utf-8') as f:
+                with open(config_file, 'r', encoding='utf-8-sig') as f:
                     config = json.load(f)
                     # 合并默认配置
                     for key in default_config:
@@ -1990,7 +2008,7 @@ class ComplaintManagementGUI:
         try:
             # 读取现有配置（保留主题等设置）
             if os.path.exists(config_file):
-                with open(config_file, 'r', encoding='utf-8') as f:
+                with open(config_file, 'r', encoding='utf-8-sig') as f:
                     config = json.load(f)
             else:
                 config = {}
@@ -2248,7 +2266,7 @@ class ComplaintManagementGUI:
                 
                 # 读取现有配置
                 if os.path.exists(config_file):
-                    with open(config_file, 'r', encoding='utf-8') as f:
+                    with open(config_file, 'r', encoding='utf-8-sig') as f:
                         config = json.load(f)
                     print(f"读取到的配置: {config}")
                 else:
@@ -2270,7 +2288,7 @@ class ComplaintManagementGUI:
                     os.fsync(f.fileno())  # 确保写入磁盘
                 
                 # 验证保存
-                with open(config_file, 'r', encoding='utf-8') as f:
+                with open(config_file, 'r', encoding='utf-8-sig') as f:
                     verify_config = json.load(f)
                     saved_theme = verify_config.get('theme', 'not found')
                     print(f"验证保存结果，主题: {saved_theme}")
@@ -2316,7 +2334,7 @@ class ComplaintManagementGUI:
             # 验证配置文件
             config_file = get_appdata_path('window_config.json')
             if os.path.exists(config_file):
-                with open(config_file, 'r', encoding='utf-8') as f:
+                with open(config_file, 'r', encoding='utf-8-sig') as f:
                     config = json.load(f)
                     print(f"重启前验证配置，主题: {config.get('theme', 'not found')}")
             
@@ -2343,7 +2361,7 @@ class ComplaintManagementGUI:
                 
                 # 读取现有配置（包含新保存的主题）
                 if os.path.exists(config_file):
-                    with open(config_file, 'r', encoding='utf-8') as f:
+                    with open(config_file, 'r', encoding='utf-8-sig') as f:
                         config = json.load(f)
                 else:
                     config = {}
@@ -3109,7 +3127,7 @@ class ComplaintManagementGUI:
             def delete_with_retry(retry_count=0):
                 # 从配置文件读取延迟设置，如果没有则使用默认值
                 try:
-                    with open(pc.get_user_data_path('print_delay_config.json'), 'r', encoding='utf-8') as f:
+                    with open(pc.get_user_data_path('print_delay_config.json'), 'r', encoding='utf-8-sig') as f:
                         delay_config = json.load(f)
                         max_retries = delay_config.get('max_retries', 5)  # 默认最多重试5次
                         initial_delay = delay_config.get('initial_delay_seconds', 15) * 1000  # 默认初始延迟15秒
@@ -3152,7 +3170,7 @@ class ComplaintManagementGUI:
             
             # 读取初始延迟配置
             try:
-                with open(pc.get_user_data_path('print_delay_config.json'), 'r', encoding='utf-8') as f:
+                with open(pc.get_user_data_path('print_delay_config.json'), 'r', encoding='utf-8-sig') as f:
                     delay_config = json.load(f)
                     initial_delay = delay_config.get('initial_delay_seconds', 15) * 1000
             except:
@@ -6835,6 +6853,12 @@ def main():
         _cli.main()
         return
 
+    # 无头自检：把界面完整搭一遍再退出，供 CI / 现场排查使用（不进入事件循环）
+    if '--selftest' in sys.argv[1:]:
+        sys.argv.remove('--selftest')
+        import ttk_gui_selftest
+        sys.exit(ttk_gui_selftest.main())
+
     # 使用固定的日志文件名（每次启动自动覆盖）
     log_filename = get_appdata_path('app_startup.log')
     _handlers = [logging.FileHandler(log_filename, mode='w', encoding='utf-8')]
@@ -6842,6 +6866,12 @@ def main():
     # 不能把 None 交给 StreamHandler，否则日志初始化就会抛异常且看不到任何提示。
     _stream = sys.stdout or sys.stderr
     if _stream is not None:
+        # 中文/符号（✓、✗）在某些 GBK 终端下会 UnicodeEncodeError，改成替换而不是报错；
+        # 文件日志始终是 utf-8，内容不受影响。
+        try:
+            _stream.reconfigure(errors='replace')
+        except Exception:
+            pass
         _handlers.append(logging.StreamHandler(_stream))
     logging.basicConfig(
         level=logging.DEBUG,
@@ -6868,7 +6898,17 @@ def main():
         
         try:
             import ttkbootstrap
-            logging.info(f"✓ ttkbootstrap可用 (版本: {ttkbootstrap.__version__ if hasattr(ttkbootstrap, '__version__') else '未知'})")
+            # 1.x 不导出 __version__，统一走 importlib.metadata；同时校验本项目用到的
+            # 控件在 1.x / 2.x 上都齐备（2.x 去掉了 PanedWindow 驼峰别名）。
+            from ttk_compat import describe, verify_widgets
+            _ver, _missing = verify_widgets()
+            logging.info(f"✓ {describe()}")
+            if _missing:
+                raise RuntimeError(
+                    "ttkbootstrap " + str(_ver) + " 缺少控件：" + ", ".join(_missing) +
+                    "；请改用 1.10.1 ~ 2.x 的版本：python3 -m pip install "
+                    "'ttkbootstrap>=1.10.1,<3'"
+                )
         except Exception as e:
             logging.error(f"✗ ttkbootstrap不可用: {e}")
             raise
@@ -6899,7 +6939,7 @@ def main():
             import json
             config_file = get_appdata_path('window_config.json')
             if os.path.exists(config_file):
-                with open(config_file, 'r', encoding='utf-8') as f:
+                with open(config_file, 'r', encoding='utf-8-sig') as f:
                     config = json.load(f)
                     theme_name = config.get('theme', 'litera')
                     logging.info(f"✓ 加载主题: {theme_name}")
@@ -6913,12 +6953,23 @@ def main():
         logging.info("创建主窗口...")
         logging.info(f"主题: {theme_name}")
         try:
+            # 先用两代 ttkbootstrap 都一定存在的 litera 建窗口，再切换到已保存的主题。
+            # 这样主题名失效时只影响配色，不会让整个程序起不来（2.x 重命名过部分主题，
+            # 旧版 window_config.json 里的名字可能已经不存在）。
             root = ttk.Window(
                 title="投诉批办单管理系统 v1.38.2",
-                themename=theme_name,
+                themename="litera",
                 size=(1400, 900),
                 resizable=(True, True)
             )
+            if theme_name and theme_name != "litera":
+                try:
+                    root.style.theme_use(theme_name)
+                    logging.info(f"✓ 已应用主题: {theme_name}")
+                except Exception as _theme_err:
+                    logging.warning(f"主题 {theme_name} 在当前 ttkbootstrap 中不可用"
+                                    f"（{_theme_err}），继续使用 litera")
+                    theme_name = "litera"
             logging.info("✓ 主窗口创建成功")
             
             logging.info("初始化GUI...")

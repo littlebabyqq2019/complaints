@@ -34,7 +34,7 @@ for pkg in ('ttkbootstrap', 'charset_normalizer', 'PyPDF2',
 hiddenimports += [
     'tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox',
     'tkinter.scrolledtext', 'tkinter.simpledialog',
-    '_tkinter', 'sqlite3', 'platform_compat',
+    '_tkinter', 'sqlite3', 'platform_compat', 'ttk_compat',
     'asyncio', 'asyncio.unix_events', 'asyncio.selector_events',
 ]
 

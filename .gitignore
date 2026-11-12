@@ -21,6 +21,8 @@ dist/
 # 运行期日志与数据库临时文件
 *.log
 AppData/app_startup.log
+AppData/ttk_selftest.log
+AppData/启动诊断.log
 AppData/*.db-journal
 AppData/*.db-wal
 AppData/*.db-shm

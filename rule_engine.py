@@ -52,7 +52,7 @@ class RuleEngine:
                     print(f"警告: 规则配置文件和默认配置均不存在")
                     return False
 
-            with open(self.config_file, 'r', encoding='utf-8') as f:
+            with open(self.config_file, 'r', encoding='utf-8-sig') as f:
                 config = json.load(f)
                 self.rules = config.get('rules', {})
                 self.keywords = config.get('keywords', {})

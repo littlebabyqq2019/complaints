@@ -1,36 +1,72 @@
 投诉批办单管理系统（统信 UOS / 麒麟 Kylin V10）
 
-一、选择正确的包
-  在终端执行 uname -m：
-    输出 x86_64   → complaints-linux-x86_64.tar.gz（Intel/AMD、兆芯、海光）
-    输出 aarch64  → complaints-linux-aarch64.tar.gz（飞腾、鲲鹏、麒麟芯、瑞芯微等 arm64 国产 CPU）
-  两个包不能混用：包内可执行文件和 _internal 下的 .so 是对应架构的原生机器码。
+一、要不要装 Python？
+   不需要。发布包自带 Python 3.10 运行时、Tk/Tcl 界面库和全部 Python 依赖，
+   全部在 _internal/ 目录里。目标机器不要装 Python，也不要 pip install 任何东西。
+   只有「源码方式」（第四节）才需要系统 Python 3 + python3-tk。
 
-二、运行
-  解压后双击「投诉批办单管理系统」或「启动GUI.sh」，也可终端执行：
-      ./启动GUI.sh
-  命令行批处理模式：
-      ./启动命令行.sh
+二、系统只需准备这些（图形桌面本身已有 X11）：
+   sudo apt install -y libreoffice-writer cups-client fonts-noto-cjk xdg-utils
+   用途：
+     libreoffice-writer（或 WPS）  读取旧 .doc、Word 转 PDF、打印前转换
+     cups-client                    提供 lp 命令，用于打印
+     fonts-noto-cjk                 中文界面与生成文档的字体
+     xdg-utils                      提供 xdg-open，用于打开文档/目录
+   没有打印机时 cups-client 可不装，其余功能照常。
 
-三、系统要求
-  - 统信 UOS 20+ / 麒麟 Kylin V10 SP1+（构建基线 Ubuntu 22.04，glibc 2.35+）
-  - 图形环境 X11 / Wayland + Tk 8.6（python3-tk）
-  - 已安装 libreoffice-writer（Word 转 PDF / .doc 读取 / 打印前转换），或 WPS
-  - 已安装 cups-client 并配置好打印机（lp 命令）
-  - 已安装中文字体 fonts-noto-cjk（界面与文档显示）
-  - 已安装 xdg-utils（xdg-open，用于打开文档与目录）
+三、运行（注意必须带 ./）
+   uname -m 判断架构，选对应包解压后：
+       cd 投诉批办单管理系统
+       ./启动GUI.sh                ← 必须带 ./
+       ./启动命令行.sh             ← 命令行批处理，也必须带 ./
+   只写「启动命令行.sh」会报「未找到命令」：Linux 默认不从当前目录找命令。
+   也可以：bash 启动GUI.sh
 
-四、旧系统 / 其他架构（龙芯 LoongArch、申威等）
-  源码为纯 Python，与 CPU 架构无关，可直接源码运行：
-      sudo apt install python3 python3-tk python3-pip python3-venv \
-                       fonts-noto-cjk libreoffice-writer cups-client xdg-utils
-      python3 -m pip install -r requirements-linux.txt
-      ./启动GUI.sh
-  如需原生可执行文件，在目标机器上执行：
-      python3 -m pip install -r requirements-linux.txt
-      python3 -m PyInstaller complaints-linux.spec --noconfirm
-  产物在 dist/投诉批办单管理系统/。
+   双击「投诉批办单管理系统」若无反应，请用 ./启动GUI.sh 启动。
+   启动器会自动检查：架构是否匹配、glibc 版本、缺失的动态库、图形环境，
+   把错误打印出来并写入 AppData/启动诊断.log，有桌面时还会弹窗提示。
 
-五、数据位置
-  配置与数据库保存在程序目录下的 AppData/ 中，
-  待打印 / 已打印 / 已处理 三个目录与程序同级，与 Windows 版一致。
+四、老系统 / 其他架构（glibc < 2.28、龙芯 LoongArch、申威等）
+   源码为纯 Python，与 CPU 架构和构建机 glibc 无关。在源码目录执行：
+       ./源码方式安装.sh
+   或手动：
+       sudo apt install -y python3 python3-tk python3-pip python3-venv \
+                           fonts-noto-cjk libreoffice-writer cups-client xdg-utils
+       python3 -m venv --system-site-packages .venv
+       .venv/bin/python -m pip install -r requirements-linux.txt
+       ./启动GUI.sh
+   如需在该机器上生成原生可执行文件：
+       .venv/bin/python -m pip install -r requirements-linux.txt
+       .venv/bin/python -m PyInstaller complaints-linux.spec --noconfirm
+
+五、架构对应关系
+   uname -m = x86_64  → complaints-linux-x86_64.tar.gz
+   uname -m = aarch64 → complaints-linux-aarch64.tar.gz
+   两包不可混用。包内可执行文件与 _internal 下的 .so 是对应架构的原生机器码。
+
+六、数据位置
+   配置与数据库保存在程序目录下的 AppData/ 中，
+   待打印 / 已打印 / 已处理 三个目录与程序同级，与 Windows 版一致。
+
+七、常见故障
+   先跑一次 ./诊断.sh ，它会直接打印：Tk 是否可用、ttkbootstrap 版本、
+   控件自检结果、最近一次启动日志。贴出这几行就能定位问题。
+   深度自检（真把界面搭一遍，不弹窗）：./投诉批办单管理系统 --selftest
+   结论看 AppData/ttk_selftest.log 最后一行 RESULT。
+
+   1) 弹窗「程序启动失败！ module 'ttkbootstrap' has no attribute 'PanedWindow'」
+      原因：ttkbootstrap 2.0 起把 ttk.PanedWindow 改名为 ttk.Panedwindow，老代码
+            在新版上取不到属性。本版本已由 ttk_compat.py 自动补齐别名，无需处理。
+      如果仍出现（说明装的是旧程序或依赖被换成 3.x）：
+      源码方式：.venv/bin/python -m pip install 'ttkbootstrap>=1.10.1,<3'
+                然后 .venv/bin/python -c "import ttk_compat; print(ttk_compat.describe())"
+      查看启动日志：AppData/app_startup.log（每次启动覆盖，记录依赖版本与控件校验结果）
+
+   2) 弹窗「主题 xxx 不可用」后界面仍正常打开
+      说明升级过 ttkbootstrap，旧主题名在新版里被重命名；程序会自动回退到 litera，
+      在「工具 → 主题切换」里重新选一次主题即可。
+
+   3) 源码方式报 ModuleNotFoundError: ttk_compat
+      说明拿的是旧源码包。确认源码目录里有 ttk_compat.py，
+      且 gui_app.py 开头是 `from ttk_compat import ttk`。
+

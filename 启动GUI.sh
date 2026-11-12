@@ -9,6 +9,11 @@ LOGDIR="./AppData"
 mkdir -p "$LOGDIR" 2>/dev/null
 LOG="$LOGDIR/启动诊断.log"
 
+# 源码方式（源码方式安装.sh 创建的 .venv）：优先用虚拟环境启动，不依赖打包产物
+if [ -x "./.venv/bin/python" ] && [ -f "./gui_app.py" ]; then
+    exec ./.venv/bin/python gui_app.py "$@"
+fi
+
 fail() {
     echo "==================================================" >&2
     echo "  投诉批办单管理系统 启动失败" >&2

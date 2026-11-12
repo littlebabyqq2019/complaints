@@ -76,6 +76,37 @@ chmod +x "dist/投诉批办单管理系统/投诉批办单管理系统"
 `platform_compat.py` 在 Windows 上仍走原逻辑（Word COM / ShellExecute / docx2pdf /
 原字体名），所以同一份代码在 Windows 上行为与旧版完全一致。
 
+## 三之二、ttkbootstrap 1.x / 2.x 兼容（`ttk_compat.py`）
+
+ttkbootstrap 2.0 把分割面板类从 `PanedWindow` 改名为 `Panedwindow`（与
+`tkinter.ttk` 一致的拼写），1.x 的驼峰别名不再导出。旧代码 `ttk.PanedWindow(...)`
+在 2.x 上直接抛 `AttributeError`，主窗口建到 `create_widgets()` 就崩，表现为
+「程序启动失败」弹窗（麒麟 V10 aarch64 实测 ttkbootstrap 2.2.7）。
+
+| 位置 | 处理 |
+| --- | --- |
+| `ttk_compat.py` | 导入时把缺失拼写补回 `ttkbootstrap` 模块（`PanedWindow`⇄`Panedwindow`、`LabelFrame`⇄`Labelframe`），并给出 `verify_widgets()` 启动自检 |
+| `gui_app.py` / `rule_management_ui.py` | 改为 `from ttk_compat import ttk`，业务代码 `.PanedWindow(...)` 不变 |
+| `gui_app.main()` | 启动时记录 ttkbootstrap 版本与控件校验结果；缺控件直接给出 `pip install 'ttkbootstrap>=1.10.1,<3'` 的可执行提示 |
+| 主题 | 先用两代都存在的 `litera` 建窗口，再 `theme_use(已保存主题)`；名字失效只影响配色，不再导致启动失败 |
+| `requirements*.txt` / CI | 依赖上限锁 `<3`，打包前用 `ttk_compat.verify_widgets()` 断言 |
+
+### GUI 冒烟测试（`ttk_gui_selftest.py`）
+
+只做 `import` / `py_compile` 抓不到这类崩溃 —— 现场是 import 全过、窗口建到一半才炸。
+流水线现在会在 Xvfb 里真把界面搭一遍：
+
+| 阶段 | 命令 | 验证对象 |
+| --- | --- | --- |
+| 源码冒烟 | `xvfb-run -a python3 ttk_gui_selftest.py` | 源码树 |
+| 产物冒烟 | `./投诉批办单管理系统 --selftest` | Release 里那个 ELF（含 `_internal/`） |
+| 现场自查 | `./诊断.sh` 或 `./投诉批办单管理系统 --selftest` | 目标机器 |
+
+自检内容：控件别名、三栏 `PanedWindow` 布局、规则管理窗口、9 个工具对话框。
+结论写入 `AppData/ttk_selftest.log`（`console=False` 时 stdout 为空，只能靠这个文件取证），
+并以退出码返回。故意删掉 `PanedWindow` 别名时自检会 fail 并打印
+`缺少控件: ['PanedWindow']`，确认它真能拦住这个回归。
+
 ## 四、目录与数据
 
 ```
@@ -85,6 +116,8 @@ chmod +x "dist/投诉批办单管理系统/投诉批办单管理系统"
 ├── 投诉批办单管理系统.desktop
 ├── _internal/               # PyInstaller 依赖（含只读默认资源）
 ├── AppData/                 # 可写配置、数据库、日志、编号
+├── ttk_compat.py            # ttkbootstrap 1.x/2.x 兼容层（随源码一起分发）
+├── 诊断.sh                  # 现场诊断：Tk / ttkbootstrap 版本 / 控件自检 / 启动日志
 ├── 投诉批办单示例#1.docx     # Word 模板
 ├── 待打印/ 已打印/ 已处理/   # 工作目录
 └── 使用说明.txt
@@ -96,15 +129,32 @@ chmod +x "dist/投诉批办单管理系统/投诉批办单管理系统"
 
 ## 五、打包（GitHub Actions）
 
-推送到 `main` 分支即自动触发 `.github/workflows/build-linux.yml`，用 matrix 并行构建两个架构：
+推送到 `main` 分支即自动触发 `.github/workflows/build-linux.yml`，用 matrix 并行构建两个架构，
+**各自原生编译，产物不通用**：
 
-1. `ubuntu-22.04`（x86_64）与 `ubuntu-22.04-arm`（aarch64）原生 runner 各跑一遍
-2. 装 Tk / 中文字体 / LibreOffice / CUPS，用系统 Python 3.10 + venv 装依赖
-3. `py_compile` + 全模块导入 + `_tkinter` 校验
-4. `python -m PyInstaller complaints-linux.spec --noconfirm`（onedir，本机原生架构）
-5. 用 `file` 校验产物 ELF 架构，生成 `.desktop`、`启动GUI.sh`、`使用说明.txt`
-6. 分别打成 `complaints-linux-x86_64.tar.gz` 与 `complaints-linux-aarch64.tar.gz` 并计算 SHA-256
-7. `release` job 汇总两个 Artifacts，创建含双架构资产的 Release
+| 架构 | 构建镜像 | 目标机器 |
+| --- | --- | --- |
+| `x86_64` | `amd64/ubuntu:18.04`（glibc 2.27） | Intel/AMD、兆芯、海光 |
+| `aarch64` | `arm64v8/ubuntu:18.04`（QEMU 模拟，arm64 容器） | 飞腾、鲲鹏、麒麟芯、瑞芯微 |
+
+aarch64 那条跑在 amd64 runner 上，靠 `docker/setup-qemu-action` 起 arm64 容器做原生交叉构建；
+两条都产出真正的 ARM / x86-64 机器码，不是同一份包改名。
+
+容器内流水线（`build-in-container.sh`）：
+
+1. 编译 Python 3.10.14 到 `/opt/py310`（容器 glibc 2.27 → 产物可在 glibc ≥ 2.28 的麒麟/UOS 运行）
+2. 装依赖，`ttkbootstrap` 锁 `>=1.10.1,<3`
+3. `py_compile` + 全模块导入 + `ttk_compat.verify_widgets()` 控件别名断言
+4. **源码 GUI 冒烟测试**：Xvfb 虚拟屏里真把三栏布局、规则窗口、9 个对话框建一遍
+5. `PyInstaller complaints-linux.spec --noconfirm`（onedir，本机原生架构）
+6. **产物冒烟测试**：`./投诉批办单管理系统 --selftest` 跑刚打出来的 ELF
+7. 用 `file` 校验 ELF 架构；扫描所有 ELF 的 `GLIBC_*` 符号，> 2.28 直接失败
+8. 补 `.desktop`、启动脚本、`诊断.sh`、`使用说明.txt`，打成
+   `complaints-linux-x86_64.tar.gz` / `complaints-linux-aarch64.tar.gz` + SHA-256
+9. `release` job 汇总两个 Artifacts 发 Release
+
+任何一步失败都不会产出 Release —— 包括第 4、6 步的 GUI 冒烟，所以「打包成功但客户机上打不开」
+这类问题会在流水线就红掉。
 
 本地手动打包（在目标架构机器上执行，产物即该架构原生可执行文件）：
 

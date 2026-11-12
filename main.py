@@ -54,7 +54,7 @@ class CounterManager:
         """从JSON文件加载编号"""
         if os.path.exists(self.config_file):
             try:
-                with open(self.config_file, 'r', encoding='utf-8') as f:
+                with open(self.config_file, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
                     self.file_number = data.get('file_number', 1)
                     self.receipt_number = data.get('receipt_number', 1)
@@ -434,7 +434,7 @@ class WordGenerator:
             self.template_path = template_path
         if output_dir is None:
             try:
-                with open(get_appdata_path('path_config.json'), 'r', encoding='utf-8') as f:
+                with open(get_appdata_path('path_config.json'), 'r', encoding='utf-8-sig') as f:
                     path_config = json.load(f)
                     output_dir = path_config.get('待打印', '待打印')
             except Exception:
@@ -1028,7 +1028,7 @@ class DocumentProcessor:
         self.counter = CounterManager()
         if output_dir is None:
             try:
-                with open(get_appdata_path('path_config.json'), 'r', encoding='utf-8') as f:
+                with open(get_appdata_path('path_config.json'), 'r', encoding='utf-8-sig') as f:
                     path_config = json.load(f)
                     output_dir = path_config.get('待打印', '待打印')
             except Exception:

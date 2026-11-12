@@ -8,7 +8,8 @@ import json
 import sys
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
-import ttkbootstrap as ttk
+# 与 gui_app.py 共用同一套 ttkbootstrap 1.x / 2.x 兼容处理（PanedWindow 别名）
+from ttk_compat import ttk
 from ttkbootstrap.constants import *
 from rule_engine import RuleEngine, get_resource_path, get_user_data_path
 from platform_compat import ui_font
@@ -2579,7 +2580,7 @@ class RuleManagementWindow:
                 print(f"已备份当前配置: {backup_file}")
 
             # 读取导入文件
-            with open(filename, 'r', encoding='utf-8') as f:
+            with open(filename, 'r', encoding='utf-8-sig') as f:
                 import_config = json.load(f)
 
             # 验证配置格式
