@@ -6824,19 +6824,29 @@ def main():
     import logging
     import sys
 
-    # 跨平台启动引导：切到应用目录、释放默认配置、注册打包中文字体
+    # 跨平台启动引导：切到应用目录、释放默认配置
     pc.ensure_app_cwd()
     pc.seed_user_data()
 
+    # 命令行批处理模式：启动命令行.sh 传 --cli，等价于 Windows 的 python main.py
+    if '--cli' in sys.argv[1:]:
+        sys.argv.remove('--cli')
+        import main as _cli
+        _cli.main()
+        return
+
     # 使用固定的日志文件名（每次启动自动覆盖）
     log_filename = get_appdata_path('app_startup.log')
+    _handlers = [logging.FileHandler(log_filename, mode='w', encoding='utf-8')]
+    # PyInstaller console=False 时 sys.stdout / sys.stderr 均为 None，
+    # 不能把 None 交给 StreamHandler，否则日志初始化就会抛异常且看不到任何提示。
+    _stream = sys.stdout or sys.stderr
+    if _stream is not None:
+        _handlers.append(logging.StreamHandler(_stream))
     logging.basicConfig(
         level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_filename, mode='w', encoding='utf-8'),  # mode='w'表示覆盖模式
-            logging.StreamHandler(sys.stdout)  # 同时输出到控制台
-        ]
+        handlers=_handlers
     )
     
     try:

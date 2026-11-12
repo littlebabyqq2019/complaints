@@ -1,8 +1,10 @@
 [Desktop Entry]
 Type=Application
+Version=1.0
 Name=投诉批办单管理系统
-Comment=投诉批办单自动生成与打印管理
-Exec=./启动GUI.sh
+Comment=投诉批办单自动生成与打印管理（统信 UOS / 麒麟 Kylin V10）
+Exec=/bin/bash -c 'cd "$(dirname "%k")" && ./启动GUI.sh'
 Icon=1.png
-Terminal=false
+Terminal=true
 Categories=Office;Utility;
+StartupNotify=true
