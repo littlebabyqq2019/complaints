@@ -82,3 +82,11 @@
       （麒麟 X11 用的是 Button-4/5，已一并绑定）。
       滚轮仍无效时先跑 ./诊断.sh，把 DISPLAY 与 Tk 版本一起发回。
 
+八、WPS 与老 .doc
+   系统预装的 WPS 会被自动检测并优先用于老二进制 .doc 的转换；
+   Word 2003 XML 工单和标准 .docx 由程序直接解析，不需要 WPS。
+   查看检测结果：./诊断.sh 里的 office / LO 两行。
+   强制只走 WPS 验证：COMPLAINTS_WPS_PREFERENCE=wps ./启动GUI.sh
+   只走 LibreOffice：  COMPLAINTS_WPS_PREFERENCE=off ./启动GUI.sh
+   没有 WPS 也没装 LibreOffice 时，仅老 .doc 无法处理，其余格式不受影响。
+

@@ -6923,7 +6923,15 @@ def main():
         except Exception as e:
             logging.error(f"✗ tkinter不可用: {e}")
             raise
-        
+
+        # 老二进制 .doc 需要外部转换器；把检测结果写进日志，现场一看就知道
+        # 该走 WPS 还是 LibreOffice。纯 WordML / OOXML 不依赖它们。
+        try:
+            from main import wps_status
+            logging.info(f"✓ {wps_status()}")
+        except Exception as _wps_err:
+            logging.warning(f"WPS 检测失败（不影响 WordML/OOXML 处理）: {_wps_err}")
+
         try:
             import ttkbootstrap
             # 1.x 不导出 __version__，统一走 importlib.metadata；同时校验本项目用到的

@@ -35,7 +35,7 @@ hiddenimports += [
     'tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox',
     'tkinter.scrolledtext', 'tkinter.simpledialog',
     '_tkinter', 'sqlite3', 'platform_compat', 'ttk_compat',
-    'ttk_gui_selftest', 'ui_layout',
+    'ttk_gui_selftest', 'ui_layout', 'wps_compat',
     'asyncio', 'asyncio.unix_events', 'asyncio.selector_events',
 ]
 

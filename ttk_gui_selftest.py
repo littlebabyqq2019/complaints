@@ -32,6 +32,33 @@ if _HERE not in sys.path:
 _LOG_PATH = None
 _LINES = []
 
+# 内嵌的最小 WordML（Word 2003 XML）热线工单样例。
+# 仓库的 示例/、待处理/ 被 .gitignore 排除，CI 检出后没有真实工单文件，
+# 用这份结构完全一致的内嵌样例保证提取链路每次都被真正跑一遍。
+_MINI_WORDML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml">
+  <w:body>
+    <w:tbl>
+      <w:tr><w:tc><w:p><w:r><w:t>工单编号</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>DH6101002026091610366</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>工单类型</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>投诉</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:tc><w:p><w:r><w:t>市民诉求信息</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>诉求标题</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>投诉医院不退费的问题</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>来源渠道</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>12345热线/电话</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:tc><w:p><w:r><w:t></w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>姓名</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>郭</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>联系电话</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>13518581619</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl>
+  </w:body>
+</w:wordDocument>
+'''
+
 
 def _report_path():
     """报告文件位置：优先 AppData/，退化到临时目录（AppData 不可写时）。"""
@@ -120,6 +147,23 @@ def main():
         flush_report()
         return 1
 
+    # 1c) WPS 调用层：统信/麒麟预装 WPS，老二进制 .doc 靠它转换。
+    #     打包环境里没有 WPS，验证「未安装时优雅降级」+ 关键入口齐全即可。
+    try:
+        import wps_compat
+        import main as _main2
+        required = ('find_wps', 'wps_available', 'convert_with_wps',
+                    'doc_to_docx_with_wps', 'word_to_pdf_with_wps',
+                    'extract_table_with_wps', 'diagnose')
+        absent = [n for n in required if not hasattr(wps_compat, n)]
+        if absent:
+            raise AssertionError('wps_compat 缺少入口: ' + ','.join(absent))
+        if wps_compat.convert_with_wps('/nonexistent.doc', 'docx') is not None:
+            raise AssertionError('源文件不存在时不应返回产物')
+        out("  OK   WPS 调用层（" + _main2.wps_status() + "）")
+    except Exception as e:
+        _fail("WPS 调用层", e)
+
     # 1b) WordML（Word 2003 XML）提取链路：现场「处理 Word 提示提取数据失败」
     #     根因是工单导出文件扩展名 .docx 但内容是 XML 单文件，python-docx 读不了。
     try:
@@ -129,15 +173,21 @@ def main():
                    + glob.glob(os.path.join(_HERE, '待处理', '*.docx')))
         wml = [p for p in samples if _main.WordMLExtractor.is_wordml(p)]
         if not wml:
-            out("  SKIP  WordML 样例文件不存在（打包产物内不附带样例）")
-        else:
-            ok = 0
-            for p in wml:
-                d = _main.WordExtractor.extract_table_data(p)
-                if not d or not (d.get('文件标题') or d.get('标题') or d.get('来文字号')):
-                    raise AssertionError('WordML 提取失败: ' + os.path.basename(p))
-                ok += 1
-            out("  OK   WordML 提取（%d 个样例）" % ok)
+            # 仓库的 示例/ 与 待处理/ 被 .gitignore 排除，CI 检出后没有真实样例。
+            # 用一份内嵌的最小 WordML 工单做等价回归（标签→值 结构完全一致）。
+            import tempfile
+            tmp = os.path.join(tempfile.gettempdir(), 'selftest_工单.xml')
+            with open(tmp, 'w', encoding='utf-8') as f:
+                f.write(_MINI_WORDML)
+            wml = [tmp]
+            out("  (使用内嵌 WordML 样例，仓库样例目录未入库)")
+        ok = 0
+        for p in wml:
+            d = _main.WordExtractor.extract_table_data(p)
+            if not d or not (d.get('文件标题') or d.get('标题') or d.get('来文字号')):
+                raise AssertionError('WordML 提取失败: ' + os.path.basename(p))
+            ok += 1
+        out("  OK   WordML 提取（%d 个样例）" % ok)
     except Exception as e:
         _fail("WordML 提取", e)
 

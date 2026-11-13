@@ -59,11 +59,13 @@ python3.10 -m pip install --no-cache-dir \
 # ---------- 4. 校验源码 ----------
 cd "${SRC}"
 python3.10 -m py_compile gui_app.py main.py database.py rule_engine.py \
-    rule_management_ui.py platform_compat.py ttk_compat.py ttk_gui_selftest.py ui_layout.py
-python3.10 -c "import platform_compat, main, database, rule_engine, rule_management_ui, ttk_compat, ttk_gui_selftest, ui_layout; print('模块导入通过')"
+    rule_management_ui.py platform_compat.py ttk_compat.py ttk_gui_selftest.py ui_layout.py wps_compat.py
+python3.10 -c "import platform_compat, main, database, rule_engine, rule_management_ui, ttk_compat, ttk_gui_selftest, ui_layout, wps_compat; print('模块导入通过')"
 # ttkbootstrap 1.x/2.x 的控件别名校验（不需要图形环境）。2.x 去掉了 PanedWindow
 # 驼峰别名，若这里失败说明打包环境的 ttkbootstrap 版本越界，产物运行会启动失败。
 python3.10 -c "import ttk_compat; v,m = ttk_compat.verify_widgets(); assert not m, '缺少控件: ' + ','.join(m); print('ttk 控件校验通过:', ttk_compat.describe())"
+# WPS 调用层自检：容器里没有 WPS，验证「未安装时能优雅降级」，不阻断构建
+python3.10 -c "import wps_compat, main; assert wps_compat.convert_with_wps('/nonexistent.doc','docx') is None; print('WPS 调用层:', main.wps_status())"
 python3.10 -c "from PyPDF2 import PdfWriter; print('PdfWriter OK')"
 
 # ---------- 4b. 无头 GUI 冒烟测试（源码） ----------

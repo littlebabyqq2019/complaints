@@ -120,6 +120,48 @@ ttkbootstrap 2.0 把分割面板类从 `PanedWindow` 改名为 `Panedwindow`（�
 `ui_layout.py` 是纯布局工具，不含业务逻辑；`ttk_gui_selftest.py` 对上述三项都有断言，
 打包前跑一遍，回归会直接让流水线变红。
 
+## 三之四、直接调用 WPS 提取数据（`wps_compat.py`）
+
+统信 / 麒麟基本都预装 WPS。老二进制 `.doc`（OLE2）纯 Python 读不了，
+必须靠 WPS（或 LibreOffice）转成 `.docx` 才能取表格。原实现有三处硬伤：
+`doc_to_docx()` 只走 LibreOffice；`word_to_pdf()` 把 WPS 当 LO 用
+（`wps --headless --convert-to pdf`，多数 WPS Linux 版不认）；没有路径探测、
+超时和 HOME 隔离。
+
+现在的分层策略（**不是所有 Word 都要 WPS**）：
+
+| 文件真实格式 | 处理方式 | 是否依赖 WPS |
+| --- | --- | --- |
+| WordML（`<?xml ... w:wordDocument>`，现场热线工单） | `WordMLExtractor` 纯 Python 解析 | 否 |
+| OOXML（标准 .docx） | `python-docx` | 否 |
+| OLE2 老 `.doc` | **WPS 优先** → LibreOffice 兜底 → python-docx 读表 | 是（之一即可） |
+
+`wps_compat.py` 提供的能力：
+
+- **路径探测**：PATH、统信/麒麟商店版、平铺目录、龙芯/申威移植版，
+  支持 `REA_WPS_COMMAND` / `WPS_COMMAND` 显式指定绝对路径
+- **多参数候选**：不同 WPS 版本命令行差异大，逐一试 `--convert-to`、
+  `-o`、`-f`、`-convert-to` 等写法，格式名也试 `docx:MS Word 2007 XML` / `docx`
+- **结果驱动**：不看返回码，只认「目标文件真的生成且非空」；每轮清掉旧产物，
+  避免超时后误读上一次的残留文件
+- **环境隔离**：临时 HOME + `QT_QPA_PLATFORM=offscreen` + 剥离 DISPLAY，
+  避免首次运行弹协议/首页、污染用户配置；每次转换有 45 秒超时并杀掉子进程
+- **配置开关**：`COMPLAINTS_WPS_PREFERENCE=auto|wps|off`，或
+  `AppData/config.json` 里 `{"wps_preference": "..."}`：
+  `auto` 检测到就用（默认）、`wps` 强制、`off` 只用 LibreOffice
+
+对外入口：`find_wps()` / `wps_available()` / `convert_with_wps(src, fmt)` /
+`doc_to_docx_with_wps()` / `word_to_pdf_with_wps()` /
+`extract_table_with_wps(path, reader=None)` / `diagnose()`。
+`main.prefer_wps()`、`main.wps_status()` 供启动日志与 `诊断.sh` 使用。
+
+现场验证：
+
+```bash
+./诊断.sh                       # 打印 WPS / LibreOffice 检测结果
+COMPLAINTS_WPS_PREFERENCE=wps ./启动GUI.sh   # 强制只走 WPS 验证通道
+```
+
 ## 四、目录与数据
 
 ```
@@ -130,6 +172,7 @@ ttkbootstrap 2.0 把分割面板类从 `PanedWindow` 改名为 `Panedwindow`（�
 ├── _internal/               # PyInstaller 依赖（含只读默认资源）
 ├── AppData/                 # 可写配置、数据库、日志、编号
 ├── ttk_compat.py            # ttkbootstrap 1.x/2.x 兼容层（随源码一起分发）
+├── wps_compat.py            # WPS 调用层（老 .doc 转换，统信/麒麟预装）
 ├── ui_layout.py             # 小屏/高DPI 布局适配：窗口自适应、滚轮、贴底按钮条
 ├── ttk_gui_selftest.py      # 无头 GUI 冒烟测试（--selftest 入口）
 ├── 诊断.sh                  # 现场诊断：Tk / ttkbootstrap 版本 / 控件自检 / 启动日志

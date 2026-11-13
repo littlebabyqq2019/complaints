@@ -58,6 +58,19 @@ except ModuleNotFoundError:
           "请用最新源码包（含 ttk_compat.py）")
 except Exception as e:
     print(f"  ttk     : 检查失败 -> {e}")
+
+# WPS / LibreOffice：只影响老二进制 .doc，WordML/OOXML 不需要
+try:
+    import main as _m
+    print(f"  office  : {_m.wps_status()}")
+    print(f"            prefer_wps={_m.prefer_wps()}")
+except Exception as e:
+    print(f"  office  : 检查失败 -> {e}")
+try:
+    import platform_compat as _pc
+    print(f"  LO      : {_pc._find_soffice() or '未检测到 LibreOffice'}")
+except Exception as e:
+    print(f"  LO      : 检查失败 -> {e}")
 PYEOF
 fi
 

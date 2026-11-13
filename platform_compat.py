@@ -252,6 +252,15 @@ def _find_soffice():
     return None
 
 
+def _find_wps():
+    """定位 WPS；探测逻辑在 wps_compat 里统一维护。"""
+    try:
+        import wps_compat
+        return wps_compat.find_wps()
+    except Exception:
+        return shutil.which("wps")
+
+
 def _run_office(cmd, timeout=120):
     try:
         return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -292,8 +301,22 @@ def word_to_pdf(word_path, out_pdf_path=None):
                 "--headless", "--norestore", "--invisible", "--nodefault", "--nolockcheck",
                 "--convert-to", "pdf:writer_pdf_Export", "--outdir", tmp_dir, word_path,
             ])
-        wps = shutil.which("wps")
+        wps = _find_wps()
         if wps:
+            # 让 wps_compat 用统一的参数候选 / HOME 隔离 / 超时策略去跑；
+            # 旧写法 `wps --headless --convert-to pdf` 多数 WPS Linux 版不认。
+            try:
+                import wps_compat
+                wps_out = wps_compat.word_to_pdf_with_wps(word_path, out_dir=tmp_dir)
+                if wps_out and os.path.isfile(wps_out) and os.path.getsize(wps_out) > 0:
+                    if os.path.abspath(wps_out) != out_pdf_path:
+                        if os.path.exists(out_pdf_path):
+                            os.remove(out_pdf_path)
+                        shutil.move(wps_out, out_pdf_path)
+                    return out_pdf_path
+            except Exception:
+                pass
+            # 兼容少数确实支持 LibreOffice 参数的版本
             candidates.append([
                 wps, "--headless", "--convert-to", "pdf", "--outdir", tmp_dir, word_path,
             ])
@@ -340,6 +363,17 @@ def doc_to_docx(doc_path, out_dir):
                 word.Quit()
             if os.path.isfile(out_path):
                 return out_path
+        except Exception:
+            pass
+
+    # WPS 是统信/麒麟的预装软件，优先用它（不依赖 LibreOffice）。
+    # COMPLAINTS_WPS_PREFERENCE=off 可强制只用 LibreOffice。
+    if os.environ.get('COMPLAINTS_WPS_PREFERENCE', '').strip().lower() != 'off' and _find_wps():
+        try:
+            import wps_compat
+            converted = wps_compat.doc_to_docx_with_wps(doc_path, out_dir=out_dir)
+            if converted and os.path.isfile(converted) and os.path.getsize(converted) > 0:
+                return converted
         except Exception:
             pass
 

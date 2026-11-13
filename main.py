@@ -223,6 +223,48 @@ def is_wordml_file(path):
     return WordMLExtractor.is_wordml(path)
 
 
+def prefer_wps():
+    """
+    是否优先用 WPS 转换老 .doc。
+
+    环境变量 COMPLAINTS_WPS_PREFERENCE：
+        auto  默认 —— 检测到 WPS 就用，没装就走 LibreOffice
+        wps   强制 WPS（没装则失败，便于现场验证 WPS 通道）
+        off   禁用 WPS，只走 LibreOffice
+    也可在 AppData/config.json 里写 {"wps_preference": "auto|wps|off"}。
+    """
+    pref = (os.environ.get('COMPLAINTS_WPS_PREFERENCE') or '').strip().lower()
+    if pref not in ('auto', 'wps', 'off'):
+        pref = 'auto'
+        try:
+            cfg = os.path.join(get_appdata_path('config.json'))
+            if os.path.isfile(cfg):
+                with open(cfg, 'r', encoding='utf-8-sig') as f:
+                    val = (json.load(f).get('wps_preference') or '').strip().lower()
+                if val in ('auto', 'wps', 'off'):
+                    pref = val
+        except Exception:
+            pass
+    if pref == 'off':
+        return False
+    try:
+        import wps_compat
+        if wps_compat.wps_available():
+            return True
+    except Exception:
+        pass
+    return pref == 'wps'
+
+
+def wps_status():
+    """给启动日志/诊断脚本用的一行说明。"""
+    try:
+        import wps_compat
+        return wps_compat.diagnose()
+    except Exception as e:
+        return 'WPS: 模块不可用 (%s)' % e
+
+
 class PDFExtractor:
     """PDF数据提取器"""
     
@@ -299,17 +341,32 @@ class DOCExtractor:
         if not doc.tables:
             return None
         table = doc.tables[0]
-        data = {}
+        data = {'来文字号': '', '文件标题': ''}
         try:
             data['来文字号'] = DOCExtractor._clean(table.cell(0, 1).text)
         except Exception:
-            data['来文字号'] = ''
+            pass
         try:
             data['文件标题'] = DOCExtractor._clean(table.cell(2, 2).text)
         except Exception:
-            data['文件标题'] = ''
-        return data or None
+            pass
+        # 两字段都空说明不是目标表格，交给后续 WPS / LibreOffice 兜底
+        return data if (data['来文字号'] or data['文件标题']) else None
 
+    @staticmethod
+    def _from_rows(rows):
+        """从二维数组（WPS 转换后读出的表格）取同样的两个字段。"""
+        if not rows:
+            return None
+
+        def cell(r, c):
+            try:
+                return DOCExtractor._clean(rows[r][c])
+            except Exception:
+                return ''
+
+        data = {'来文字号': cell(0, 1), '文件标题': cell(2, 2)}
+        return data if (data['来文字号'] or data['文件标题']) else None
     @classmethod
     def get_word_instance(cls):
         """获取或创建Word实例（仅 Windows COM 分支使用）。"""
@@ -400,8 +457,13 @@ class DOCExtractor:
                         data['文件标题'] = cls._clean(table.Cell(3, 3).Range.Text)
                     except Exception:
                         data['文件标题'] = ''
-                print(f"DOC提取成功: 来文字号={data.get('来文字号','')}, 文件标题={data.get('文件标题','')}")
-                return data if data else None
+                # 关键：COM 打开成功但表格为空/全是空字符串时，不能把空 dict
+                # 当成「提取成功」返回，否则上层不会继续尝试 WPS / LibreOffice，
+                # 现场就会表现为「提取数据失败」。只有拿到实质内容才提前返回。
+                if data and (data.get('来文字号') or data.get('文件标题')):
+                    print(f"DOC提取成功(COM): 来文字号={data.get('来文字号','')}, 文件标题={data.get('文件标题','')}")
+                    return data
+                print("DOC(COM) 未取到有效字段，继续尝试 WPS / LibreOffice")
             except Exception as e:
                 print(f"DOC文件提取失败 {doc_path}: {e}")
             finally:
@@ -418,15 +480,36 @@ class DOCExtractor:
                     except Exception:
                         pass
 
-        # 3) Linux：LibreOffice/WPS 无头转换为 .docx 后读取
+        # 3) Linux：WPS（统信/麒麟预装）优先，LibreOffice 兜底，转成 .docx 后读取。
+        #    pc.doc_to_docx 内部已按 WPS -> LO 的顺序尝试；这里额外暴露 WPS 直读分支，
+        #    让「直接用 WPS 提取数据」不依赖 LibreOffice 是否安装。
         tmp_dir = tempfile.mkdtemp(prefix="docext_")
         try:
+            # 3a) WPS 专用通道：转换 + 读表格一步完成
+            if prefer_wps():
+                try:
+                    import wps_compat
+                    rows = wps_compat.extract_table_with_wps(
+                        doc_path,
+                        reader=None,
+                        out_dir=tmp_dir,
+                    )
+                    if rows and rows.get('_rows'):
+                        data = cls._from_rows(rows['_rows'])
+                        if data:
+                            print(f"DOC提取成功(WPS): 来文字号={data.get('来文字号','')}, "
+                                  f"文件标题={data.get('文件标题','')}")
+                            return data
+                except Exception as e:
+                    print(f"WPS 提取失败 {doc_path}: {e}")
+
+            # 3b) 通用通道（WPS 或 LibreOffice 转换）
             converted = pc.doc_to_docx(doc_path, tmp_dir)
             if converted:
                 d = Document(converted)
                 data = cls._from_document(d)
                 if data:
-                    print(f"DOC提取成功(LO): 来文字号={data.get('来文字号','')}, 文件标题={data.get('文件标题','')}")
+                    print(f"DOC提取成功(转换): 来文字号={data.get('来文字号','')}, 文件标题={data.get('文件标题','')}")
                     return data
         except Exception as e:
             print(f"DOC文件提取失败 {doc_path}: {e}")
