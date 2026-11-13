@@ -10,6 +10,8 @@ import json
 import glob
 import shutil
 import tempfile
+import zipfile
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 import pdfplumber
@@ -108,6 +110,117 @@ class CounterManager:
         if self.receipt_number > 1:
             self.receipt_number -= 1
             self.save()
+
+
+class WordMLExtractor:
+    """
+    Word 2003 XML（WordML）提取器。
+
+    现场发现的真实数据：部分「热线工单」导出文件扩展名叫 .docx / .doc，
+    文件内容却是以 ``<?xml ...?>`` 开头的 WordML 单文件（w:wordDocument），
+    不是 OOXML 的 ZIP 包。python-docx 只能读 ZIP，遇到这类文件直接
+    PackageNotFoundError，界面就报「提取数据失败」。本类按解析后的表格
+    行列提取字段，不依赖 Word / LibreOffice，麒麟、统信上都能直接跑。
+    """
+
+    W = '{http://schemas.microsoft.com/office/word/2003/wordml}'
+
+    @staticmethod
+    def is_wordml(path):
+        """按文件头判断，不看扩展名（扩展名经常是错的）。"""
+        try:
+            with open(path, 'rb') as f:
+                head = f.read(512).lstrip().lower()
+            return head.startswith(b'<?xml') and b'worddocument' in head
+        except Exception:
+            return False
+
+    @classmethod
+    def _tables(cls, path):
+        """返回 [[[单元格文本, ...], ...], ...]：表 -> 行 -> 列。"""
+        with open(path, 'rb') as f:
+            raw = f.read()
+        root = ET.fromstring(raw)
+        result = []
+        for tbl in root.iter(cls.W + 'tbl'):
+            rows = []
+            for tr in tbl.findall(cls.W + 'tr'):
+                cells = []
+                for tc in tr.findall(cls.W + 'tc'):
+                    text = ''.join(t.text or '' for t in tc.iter(cls.W + 't'))
+                    cells.append(text.replace('\r', '').replace('\x07', '').strip())
+                rows.append(cells)
+            if rows:
+                result.append(rows)
+        return result
+
+    @classmethod
+    def extract_table_data(cls, path):
+        """
+        从 WordML 工单表提取字段，输出兼容已有生成器的键：
+            来文字号 / 文件标题 / 标题 / 来源 / 姓名 / 诉求内容 / 联系电话 / 事发地
+        找不到任何可用字段时返回 None（让调用方继续走 LO 转换兜底）。
+        """
+        try:
+            tables = cls._tables(path)
+        except Exception as e:
+            print(f'WordML 解析失败 {path}: {e}')
+            return None
+
+        if not tables:
+            print(f'WordML 没有表格: {path}')
+            return None
+
+        rows = tables[0]
+        data = {}
+
+        # 1) 标签 -> 值 的键值对（同一行里「标签」后面紧跟它的值）
+        labels = {
+            '工单编号': '工单编号', '诉求标题': '诉求标题', '来源渠道': '来源渠道',
+            '姓名': '姓名', '诉求内容': '诉求内容', '事发地': '事发地',
+            '联系电话': '联系电话', '工单类型': '工单类型', '责任部门': '责任部门',
+            '登记时间': '登记时间', '办理期限': '办理期限',
+        }
+        for row in rows:
+            for i, cell in enumerate(row):
+                key = labels.get(cell)
+                if key and i + 1 < len(row) and row[i + 1]:
+                    data.setdefault(key, row[i + 1])
+                # 兼容「标签：值」写在同一格里
+                for cn in labels:
+                    if cell.startswith(cn + '：') or cell.startswith(cn + ':'):
+                        val = cell.split('：', 1)[-1].split(':', 1)[-1].strip()
+                        if val:
+                            data.setdefault(cn, val)
+
+        # 2) 供 WordGenerator.generate_from_word / generate_from_doc 使用的标准键
+        title = data.get('诉求标题') or ''
+        content = data.get('诉求内容') or ''
+        number = data.get('工单编号') or ''
+        source = data.get('来源渠道') or ''
+        name = data.get('姓名') or ''
+
+        # 标题为空时用诉求内容首句兜底，避免生成空白批办单
+        if not title and content:
+            title = content.split('。')[0][:120]
+
+        data['来文字号'] = number
+        data['文件标题'] = title
+        data['标题'] = title
+        data['来源'] = source
+        data['姓名'] = name
+
+        if not (title or number or name):
+            print(f'WordML 未识别到有效字段: {path}')
+            return None
+
+        print(f'WordML提取成功: 工单编号={number}, 标题={title}, 来源={source}, 姓名={name}')
+        return data
+
+
+def is_wordml_file(path):
+    """模块级便捷函数。"""
+    return WordMLExtractor.is_wordml(path)
 
 
 class PDFExtractor:
@@ -242,6 +355,12 @@ class DOCExtractor:
         """
         doc_path = os.path.abspath(doc_path)
 
+        # 0) 扩展名不可信：先按文件头识别 WordML（Word 2003 XML 单文件）
+        if WordMLExtractor.is_wordml(doc_path):
+            data = WordMLExtractor.extract_table_data(doc_path)
+            if data:
+                return data
+
         # 1) 兼容「.docx 重命名为 .doc」的文件：本质是 OOXML，python-docx 可直接读
         try:
             d = Document(doc_path)
@@ -325,6 +444,11 @@ class WordExtractor:
         从Word文档提取表格数据
         返回: dict包含提取的数据
         """
+        # 扩展名不可信：现场大量「热线工单」导出为 Word 2003 XML（WordML），
+        # 文件名却叫 .docx。python-docx 读不了，必须单独解析。
+        if WordMLExtractor.is_wordml(docx_path):
+            return WordMLExtractor.extract_table_data(docx_path)
+
         try:
             doc = Document(docx_path)
             
@@ -985,7 +1109,9 @@ class WordGenerator:
             self.set_cell_text_keep_format(table.rows[3].cells[9], f"C-{year_suffix}-{receipt_number}", alignment='center')
 
             # 文件标题 → 行[4]列[2]（"文件标题"标签右侧）- 添加前置空格
-            self.set_cell_text_keep_format(table.rows[4].cells[2], word_data.get('标题', ''), add_prefix_space=True)
+            # 兼容两种提取器：WordML/热线工单用「标题」，旧版 docx 表用「文件标题」
+            word_title = word_data.get('标题') or word_data.get('文件标题', '')
+            self.set_cell_text_keep_format(table.rows[4].cells[2], word_title, add_prefix_space=True)
 
             # 根据文件名和文件标题关键词填充额外内容
             # 优先使用新的规则引擎

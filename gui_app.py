@@ -28,6 +28,7 @@ from openpyxl.styles import Font, Alignment, PatternFill
 from PIL import Image, ImageTk
 import tempfile
 from pypinyin import lazy_pinyin, Style
+import ui_layout
 
 # 导入主程序模块
 from main import DocumentProcessor, WordGenerator, PDFExtractor, WordExtractor, DOCExtractor, CounterManager
@@ -1036,7 +1037,12 @@ class ComplaintManagementGUI:
         
     def create_edit_tab(self, parent):
         """创建表格编辑标签页"""
-        # 创建主容器，分左右两部分
+        # 底部按钮条先 pack 到 parent 的 BOTTOM：无论表单多高、屏幕多矮，
+        # 这一排按钮永远完整可见（麒麟现场反馈下半截被裁掉）。
+        self.edit_action_bar = ttk.Frame(parent)
+        self.edit_action_bar.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=(4, 8))
+
+        # 创建主容器，分左右两部分（占满按钮条之外的剩余空间）
         main_container = ttk.Frame(parent)
         main_container.pack(fill=tk.BOTH, expand=True)
         
@@ -1045,17 +1051,32 @@ class ComplaintManagementGUI:
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # 创建滚动框架
-        canvas = tk.Canvas(left_frame)
+        canvas = tk.Canvas(left_frame, highlightthickness=0, borderwidth=0)
         scrollbar = ttk.Scrollbar(left_frame, orient="vertical", command=canvas.yview)
         self.edit_frame = ttk.Frame(canvas)
         
-        self.edit_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
+        _win_id = canvas.create_window((0, 0), window=self.edit_frame, anchor="nw")
         
-        canvas.create_window((0, 0), window=self.edit_frame, anchor="nw")
+        def _update_scrollregion(_event=None):
+            try:
+                canvas.configure(scrollregion=canvas.bbox("all"))
+            except Exception:
+                pass
+        
+        def _fit_canvas_width(event):
+            try:
+                canvas.itemconfigure(_win_id, width=max(event.width, 1))
+            except Exception:
+                pass
+        
+        self.edit_frame.bind("<Configure>", _update_scrollregion)
+        canvas.bind("<Configure>", _fit_canvas_width)
         canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # 关键：Linux/X11 的滚轮事件是 Button-4/5，Windows 是 MouseWheel。
+        # 原来完全没绑，表单比窗口高时用户滚不动，底部按钮自然看不见。
+        ui_layout.bind_mousewheel(canvas, canvas)
+        ui_layout.bind_mousewheel(self.edit_frame, canvas)
         
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -1173,12 +1194,16 @@ class ComplaintManagementGUI:
                               command=lambda: self.search_by_reference_number(),
                               bootstyle="success-outline").pack(side=tk.LEFT, padx=2)
         
-        # 底部按钮区域
-        bottom_frame = ttk.Frame(self.edit_frame)
-        bottom_frame.pack(fill=tk.X, padx=10, pady=15)
+        # 底部按钮区域：固定在窗口底部的 action bar，不随表单滚动，
+        # 也不会被表单高度挤出屏幕。分两行排布，窄屏时按钮不会横向溢出。
+        bottom_frame = self.edit_action_bar
+        row1 = ttk.Frame(bottom_frame)
+        row1.pack(fill=tk.X)
+        row2 = ttk.Frame(bottom_frame)
+        row2.pack(fill=tk.X, pady=(4, 0))
         
-        # 左侧：预览、打印、保存、清空按钮 - 使用现代化样式
-        left_buttons = ttk.Frame(bottom_frame)
+        # 第一行：预览、打印、保存、清空
+        left_buttons = ttk.Frame(row1)
         left_buttons.pack(side=tk.LEFT)
         
         ttk.Button(left_buttons, text="👁预览", command=self.print_preview, width=7, bootstyle="info").pack(side=tk.LEFT, padx=2, ipady=5)
@@ -1186,19 +1211,19 @@ class ComplaintManagementGUI:
         ttk.Button(left_buttons, text="💾保存", command=self.save_current_file, width=7, bootstyle="primary").pack(side=tk.LEFT, padx=2, ipady=5)
         ttk.Button(left_buttons, text="🗑清空", command=self.clear_form, width=7, bootstyle="danger").pack(side=tk.LEFT, padx=2, ipady=5)
         
-        # 中间：导航按钮
-        nav_frame = ttk.Frame(bottom_frame)
+        # 导航按钮
+        nav_frame = ttk.Frame(row1)
         nav_frame.pack(side=tk.LEFT, padx=20)
         
         ttk.Button(nav_frame, text="⬅上一个", command=self.load_previous_file, width=9, bootstyle="secondary").pack(side=tk.LEFT, padx=3, ipady=6)
         ttk.Button(nav_frame, text="➡下一个", command=self.load_next_file, width=9, bootstyle="secondary").pack(side=tk.LEFT, padx=3, ipady=6)
         
-        # 右侧：手动添加按钮
-        right_buttons = ttk.Frame(bottom_frame)
-        right_buttons.pack(side=tk.LEFT, padx=5)
+        # 第二行：手动添加按钮（独立一行，任何窗口宽度都能完整点得到）
+        right_buttons = ttk.Frame(row2)
+        right_buttons.pack(side=tk.LEFT)
         
         ttk.Button(right_buttons, text="📝手动添加批办单", command=self.manual_add_document, 
-                  width=15, bootstyle="warning").pack(side=tk.LEFT, ipady=6)
+                   width=15, bootstyle="warning").pack(side=tk.LEFT, ipady=6)
         
     def create_log_tab(self, parent):
         """创建日志标签页"""
@@ -4872,20 +4897,26 @@ class ComplaintManagementGUI:
         """二维码设置"""
         dialog = tk.Toplevel(self.root)
         dialog.title("二维码设置")
-        dialog.geometry("500x580")
-        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        # 固定尺寸 + 不可调整会导致小屏/高 DPI 下底部按钮被挤出可视区。
+        # 改为按屏幕自适应、允许拖动，并把按钮固定在窗口底部。
+        ui_layout.fit_dialog_to_screen(dialog, self.root, width=520, height=640,
+                                       min_width=440, min_height=420)
         
-        # 主框架
-        main_frame = ttk.Frame(dialog)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        # 按钮区先 pack 到底部，保证任何窗口高度下都完整可见
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=20, pady=(6, 14))
+        
+        # 主体内容放可滚动容器，内容超高时滚轮能滚到
+        _canvas, main_frame, _outer = ui_layout.make_scrollable_frame(dialog, ttk)
         
         # 标题
         ttk.Label(main_frame, text="📱 二维码设置", 
-                 font=(ui_font('微软雅黑'), 14, 'bold')).pack(pady=(0, 15))
+                 font=(ui_font('微软雅黑'), 14, 'bold')).pack(pady=(12, 12), anchor=tk.W, padx=20)
         
         # 启用开关
         enable_frame = ttk.Frame(main_frame)
-        enable_frame.pack(fill=tk.X, pady=8)
+        enable_frame.pack(fill=tk.X, pady=8, padx=20)
         
         enable_var = tk.BooleanVar(value=self.qrcode_config['enabled'])
         ttk.Checkbutton(enable_frame, text="启用二维码功能", 
@@ -4894,7 +4925,7 @@ class ComplaintManagementGUI:
         
         # 二维码尺寸选择
         size_frame = ttk.LabelFrame(main_frame, text="二维码尺寸", padding=15)
-        size_frame.pack(fill=tk.X, pady=8)
+        size_frame.pack(fill=tk.X, pady=8, padx=20)
         
         size_var = tk.StringVar(value=self.qrcode_config['size'])
         ttk.Radiobutton(size_frame, text="大 (2.7cm × 2.7cm)", 
@@ -4904,7 +4935,7 @@ class ComplaintManagementGUI:
         
         # 编码字段选择
         fields_frame = ttk.LabelFrame(main_frame, text="编码内容（选择需要编入二维码的字段）", padding=15)
-        fields_frame.pack(fill=tk.X, pady=8)
+        fields_frame.pack(fill=tk.X, pady=8, padx=20)
         
         field_vars = {}
         fields = ['收文编号', '收文日期', '来文字号', '来文单位', '收文途径', '文件标题']
@@ -4918,12 +4949,9 @@ class ComplaintManagementGUI:
         # 说明文字
         info_text = "二维码将放置在批办单右下角（悬浮于文字之上）"
         ttk.Label(main_frame, text=info_text, font=(ui_font('微软雅黑'), 9), 
-                 foreground='#666').pack(pady=8)
+                 foreground='#666').pack(pady=8, padx=20)
         
-        # 按钮框架 - 确保可见
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(pady=15, side=tk.BOTTOM)
-        
+        # 按钮已在窗口底部固定（见函数开头），这里只绑定命令
         def save_config():
             # 更新配置
             self.qrcode_config['enabled'] = enable_var.get()

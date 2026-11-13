@@ -102,10 +102,23 @@ ttkbootstrap 2.0 把分割面板类从 `PanedWindow` 改名为 `Panedwindow`（�
 | 产物冒烟 | `./投诉批办单管理系统 --selftest` | Release 里那个 ELF（含 `_internal/`） |
 | 现场自查 | `./诊断.sh` 或 `./投诉批办单管理系统 --selftest` | 目标机器 |
 
-自检内容：控件别名、三栏 `PanedWindow` 布局、规则管理窗口、9 个工具对话框。
+自检内容：控件别名、WordML 工单提取、三栏 `PanedWindow` 布局、规则管理窗口、
+编辑页底部 7 个按钮是否固定在可视区、滚轮事件绑定、10 个工具对话框（其中二维码
+设置额外断言「可拖动调整 + 保存/取消贴底」）。
 结论写入 `AppData/ttk_selftest.log`（`console=False` 时 stdout 为空，只能靠这个文件取证），
 并以退出码返回。故意删掉 `PanedWindow` 别名时自检会 fail 并打印
 `缺少控件: ['PanedWindow']`，确认它真能拦住这个回归。
+
+## 三之三、麒麟现场三个问题的修复（2026-11-13）
+
+| 现象 | 根因 | 修复 |
+| --- | --- | --- |
+| PDF 正常，Word 提示「提取数据失败」 | 「热线工单」导出的是 **Word 2003 XML（WordML）单文件**，扩展名却叫 `.docx`；`python-docx` 只认 OOXML 的 ZIP 包，直接 `PackageNotFoundError`。PDF 走 pdfplumber 所以不受影响 | `main.py` 新增 `WordMLExtractor`，按文件头（不看扩展名）识别并用 `ElementTree` 解析 `w:tbl`；`WordExtractor` / `DOCExtractor` 优先走它；输出兼容生成器的 `来文字号 / 文件标题 / 标题 / 来源 / 姓名` |
+| 二维码设置窗口不能拖大、最下两个按钮看不见 | 固定 `500x580` + `resizable(False, False)`，按钮还 pack 在内容末尾，屏幕稍矮或缩放后就被挤出可视区 | `ui_layout.fit_dialog_to_screen()` 按屏幕自适应、允许拖动、居中；按钮条先 `pack(side=BOTTOM)` 固定；主体放进 `make_scrollable_frame()` 可滚动 |
+| 批办单编辑页最下一排按钮被裁掉一半 | 表单放在 Canvas 里却**完全没绑滚轮**（Linux/X11 是 Button-4/5），内容超高时用户滚不动；按钮本身也在滚动内容末尾 | 按钮条移到 `edit_action_bar`，固定在 tab 底部、分两行排布；`ui_layout.bind_mousewheel()` 同时绑 `MouseWheel` 与 `Button-4/5`，并用 Toplevel 级 `bind_all` 兜住动态创建的输入框（按事件来源过滤，不干扰其它滚动区） |
+
+`ui_layout.py` 是纯布局工具，不含业务逻辑；`ttk_gui_selftest.py` 对上述三项都有断言，
+打包前跑一遍，回归会直接让流水线变红。
 
 ## 四、目录与数据
 
@@ -117,6 +130,8 @@ ttkbootstrap 2.0 把分割面板类从 `PanedWindow` 改名为 `Panedwindow`（�
 ├── _internal/               # PyInstaller 依赖（含只读默认资源）
 ├── AppData/                 # 可写配置、数据库、日志、编号
 ├── ttk_compat.py            # ttkbootstrap 1.x/2.x 兼容层（随源码一起分发）
+├── ui_layout.py             # 小屏/高DPI 布局适配：窗口自适应、滚轮、贴底按钮条
+├── ttk_gui_selftest.py      # 无头 GUI 冒烟测试（--selftest 入口）
 ├── 诊断.sh                  # 现场诊断：Tk / ttkbootstrap 版本 / 控件自检 / 启动日志
 ├── 投诉批办单示例#1.docx     # Word 模板
 ├── 待打印/ 已打印/ 已处理/   # 工作目录

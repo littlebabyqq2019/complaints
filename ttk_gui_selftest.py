@@ -120,6 +120,27 @@ def main():
         flush_report()
         return 1
 
+    # 1b) WordML（Word 2003 XML）提取链路：现场「处理 Word 提示提取数据失败」
+    #     根因是工单导出文件扩展名 .docx 但内容是 XML 单文件，python-docx 读不了。
+    try:
+        import main as _main
+        import glob
+        samples = (glob.glob(os.path.join(_HERE, '示例', '*.docx'))
+                   + glob.glob(os.path.join(_HERE, '待处理', '*.docx')))
+        wml = [p for p in samples if _main.WordMLExtractor.is_wordml(p)]
+        if not wml:
+            out("  SKIP  WordML 样例文件不存在（打包产物内不附带样例）")
+        else:
+            ok = 0
+            for p in wml:
+                d = _main.WordExtractor.extract_table_data(p)
+                if not d or not (d.get('文件标题') or d.get('标题') or d.get('来文字号')):
+                    raise AssertionError('WordML 提取失败: ' + os.path.basename(p))
+                ok += 1
+            out("  OK   WordML 提取（%d 个样例）" % ok)
+    except Exception as e:
+        _fail("WordML 提取", e)
+
     try:
         import tkinter as tk
         import tkinter.messagebox as mb
@@ -193,7 +214,52 @@ def main():
             except Exception:
                 pass
 
-    # 4) 工具菜单里的全部对话框
+    # 4) 底部按钮条：必须挂在固定栏上，且所有按钮都真实存在
+    #    （麒麟现场：批办单编辑页最下一排按钮被裁掉一半）
+    try:
+        bar = getattr(app, 'edit_action_bar', None)
+        if bar is None:
+            raise AssertionError('缺少 edit_action_bar（按钮仍放在滚动表单里）')
+        btn_texts = []
+
+        def _collect(w):
+            for c in w.winfo_children():
+                try:
+                    t = c.cget('text')
+                    if t:
+                        btn_texts.append(str(t))
+                except Exception:
+                    pass
+                _collect(c)
+
+        _collect(bar)
+        expected = ['👁预览', '🖨打印', '💾保存', '🗑清空',
+                    '⬅上一个', '➡下一个', '📝手动添加批办单']
+        missing_btns = [t for t in expected if t not in btn_texts]
+        if missing_btns:
+            raise AssertionError('底部按钮缺失: ' + ','.join(missing_btns))
+        if bar.winfo_manager() != 'pack':
+            raise AssertionError('按钮栏未 pack')
+        out("  OK   编辑页底部按钮条（%d 个按钮，固定可见）" % len(btn_texts))
+    except Exception as e:
+        _fail("编辑页底部按钮条", e)
+
+    # 4b) 滚轮绑定：Linux/X11 发 Button-4/5，Windows 发 MouseWheel
+    #     （麒麟现场：表单滚不动，底部内容永远看不到）
+    try:
+        import ui_layout
+        c = tk.Canvas(root)
+        ui_layout.bind_mousewheel(c, c)
+        binds = c.bind()
+        for evt in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+            if evt not in binds:
+                raise AssertionError('未绑定滚轮事件 ' + evt)
+        c.destroy()
+        out("  OK   滚轮绑定（MouseWheel / Button-4 / Button-5）")
+    except Exception as e:
+        _fail("滚轮绑定", e)
+
+    # 5) 工具菜单里的全部对话框
     for label, meth in [
         ("主题切换", "change_theme"),
         ("快捷填充设置", "open_quick_fill_settings"),
@@ -213,6 +279,51 @@ def main():
         try:
             fn()
             root.update_idletasks()
+
+            # 二维码设置专项断言：窗口可拖动调整、底部按钮贴在 dialog 底部
+            if meth == 'manage_qrcode':
+                tops = [w for w in set(root.winfo_children()) - before
+                        if isinstance(w, tk.Toplevel)]
+                if not tops:
+                    raise AssertionError('未创建二维码设置窗口')
+                dlg = tops[0]
+                try:
+                    rx, ry = dlg.resizable()
+                    if not (rx and ry):
+                        raise AssertionError('二维码设置窗口不可拖动调整')
+                except AssertionError:
+                    raise
+                except Exception:
+                    pass
+                texts = []
+
+                def _dlg_collect(w):
+                    for c in w.winfo_children():
+                        try:
+                            t = c.cget('text')
+                            if t:
+                                texts.append(str(t))
+                        except Exception:
+                            pass
+                        _dlg_collect(c)
+
+                _dlg_collect(dlg)
+                for t in ('保存', '取消'):
+                    if t not in texts:
+                        raise AssertionError('二维码设置缺少按钮 ' + t)
+                # 按钮所在 Frame 必须直接 pack 在 dialog 的 BOTTOM
+                bar_ok = False
+                for c in dlg.winfo_children():
+                    try:
+                        info = c.pack_info()
+                        if info.get('side') == 'bottom':
+                            bar_ok = True
+                    except Exception:
+                        pass
+                if not bar_ok:
+                    raise AssertionError('二维码按钮未固定在窗口底部')
+                out("  OK      ↳ 可调整大小 / 保存·取消 固定底部")
+
             out("  OK   " + label)
         except Exception as e:
             _fail(label, e)
