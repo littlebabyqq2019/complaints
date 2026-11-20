@@ -162,6 +162,22 @@ ttkbootstrap 2.0 把分割面板类从 `PanedWindow` 改名为 `Panedwindow`（�
 COMPLAINTS_WPS_PREFERENCE=wps ./启动GUI.sh   # 强制只走 WPS 验证通道
 ```
 
+## 三之五、与 Windows 版生成结果对齐（2026-11-20）
+
+逐行对比 Windows 源码（`main.py` 的 `generate_from_pdf` / `generate_from_doc` /
+`generate_from_word`、`set_cell_text_keep_format`）后修正四处：
+
+| 现场现象 | 根因 | 修复 |
+| --- | --- | --- |
+| 来文单位不是 12345 | 麒麟的热线工单是 WordML 扩展名 `.docx`，走 `generate_from_word`，填了 `word_data['姓名']`（人名字）；Windows 的 pdf/doc 分支固定填 `"12345"` | `generate_from_word` 改为固定 `"12345"` |
+| 收文途径不是信息中心 | 同上，原来填 `word_data['来源']`（渠道名） | `generate_from_word` 改为固定 `"信息中心"` |
+| 来文字号为空 | `generate_from_word` 根本没写行[1]列[2]；Windows 的 doc 分支取 `table.Cell(1,2)`（第一行第二列） | 补写行[1]列[2]，取 `来文字号`（WordML 已提取工单编号），并按字符数设字号（与 pdf/doc 一致） |
+| 填充内容字体是 Noto Serif CJK SC | Linux 的 `set_cell_text_keep_format` 用了 `ui_font('仿宋_GB2312')`，在麒麟被映射成 Noto Serif 写进 docx；Windows 直接写字体名字符串 | 写入 docx 的字体固定为 `'仿宋_GB2312'`（含 eastAsia/ascii/hAnsi），`ui_font` 只留给 GUI 显示 |
+| 按钮图标有的显示不出来 | Tk 8.6 在麒麟用轮廓字体，不含 emoji 字形；少数符号恰好有，显得不一致 | 新增 `emoji_compat.py`：Windows 原样保留；Linux 无轮廓 emoji 字体时剥掉控件文本里的 emoji，只留中文标签，避免方框 |
+
+`COMPLAINTS_EMOJI=auto|on|off` 可覆盖 emoji 策略（默认 auto）。
+启动日志记录 `emoji=auto/剥掉（避免方框）`。
+
 ## 四、目录与数据
 
 ```
@@ -174,6 +190,7 @@ COMPLAINTS_WPS_PREFERENCE=wps ./启动GUI.sh   # 强制只走 WPS 验证通道
 ├── ttk_compat.py            # ttkbootstrap 1.x/2.x 兼容层（随源码一起分发）
 ├── wps_compat.py            # WPS 调用层（老 .doc 转换，统信/麒麟预装）
 ├── ui_layout.py             # 小屏/高DPI 布局适配：窗口自适应、滚轮、贴底按钮条
+├── emoji_compat.py          # 按钮 emoji 兼容：麒麟无 emoji 字体时剥掉图标避免方框
 ├── ttk_gui_selftest.py      # 无头 GUI 冒烟测试（--selftest 入口）
 ├── 诊断.sh                  # 现场诊断：Tk / ttkbootstrap 版本 / 控件自检 / 启动日志
 ├── 投诉批办单示例#1.docx     # Word 模板

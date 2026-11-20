@@ -14,6 +14,10 @@ from tkinter import messagebox, filedialog, scrolledtext, simpledialog
 # Panedwindow），老代码会 AttributeError 启动失败；ttk_compat 在导入时补齐别名。
 from ttk_compat import ttk
 from ttkbootstrap.constants import *
+from emoji_compat import install_emoji_compat, status as emoji_status
+# 麒麟/统信的 Tk 8.6 没有 emoji 轮廓字体，按钮图标会显示成方框；
+# Windows 原样保留。必须在任何控件创建之前安装。
+install_emoji_compat(ttk)
 from datetime import datetime
 import threading
 from pathlib import Path
@@ -6931,6 +6935,7 @@ def main():
             logging.info(f"✓ {wps_status()}")
         except Exception as _wps_err:
             logging.warning(f"WPS 检测失败（不影响 WordML/OOXML 处理）: {_wps_err}")
+        logging.info(f"✓ {emoji_status()}")
 
         try:
             import ttkbootstrap

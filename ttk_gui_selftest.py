@@ -188,6 +188,37 @@ def main():
                 raise AssertionError('WordML 提取失败: ' + os.path.basename(p))
             ok += 1
         out("  OK   WordML 提取（%d 个样例）" % ok)
+
+        # 1b-2) 生成结果与 Windows 版一致性：来文单位=12345、收文途径=信息中心、
+        #      来文字号=工单第一行第二列、填充字体=仿宋_GB2312（不能是 Noto）
+        try:
+            import tempfile as _tf
+            _data = _main.WordExtractor.extract_table_data(wml[0])
+            _out = os.path.join(_tf.gettempdir(), 'selftest_生成批办单.docx')
+            _gen = _main.WordGenerator(output_dir=_tf.gettempdir())
+            if not _gen.generate_from_word(_data, 9901, 9902, _out, 'selftest.docx'):
+                raise AssertionError('generate_from_word 失败')
+            from docx import Document as _Doc
+            _tbl = _Doc(_out).tables[0]
+            def _cell(r, c):
+                return _tbl.cell(r, c).text.strip()
+            if _cell(0, 2) != '12345':
+                raise AssertionError('来文单位应为 12345，实际 %r' % _cell(0, 2))
+            if _cell(2, 9) != '信息中心':
+                raise AssertionError('收文途径应为 信息中心，实际 %r' % _cell(2, 9))
+            if not _cell(1, 2):
+                raise AssertionError('来文字号为空（应取工单第一行第二列）')
+            _fonts = set()
+            for r, c in ((0, 2), (1, 2), (2, 9), (4, 2)):
+                for _p in _tbl.cell(r, c).paragraphs:
+                    for _run in _p.runs:
+                        if _run.text.strip():
+                            _fonts.add(_run.font.name)
+            if _fonts and _fonts != {'仿宋_GB2312'}:
+                raise AssertionError('填充字体错误: %s' % _fonts)
+            out("  OK   生成批办单：12345 / 信息中心 / 来文字号 / 仿宋_GB2312")
+        except Exception as e:
+            _fail("生成批办单字段与字体", e)
     except Exception as e:
         _fail("WordML 提取", e)
 

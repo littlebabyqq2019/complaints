@@ -705,12 +705,15 @@ class WordGenerator:
         first_para = cell.paragraphs[0]
         _format_paragraph(first_para)
         # 去掉前导的半角/全角/不间断空格
+        # 写入 docx 的字体名必须是模板要求的「仿宋_GB2312」，和 Windows 版一致。
+        # 注意不能用 ui_font()：它会把 Windows 字体映射成 Noto Serif CJK SC，
+        # 导致麒麟上生成的批办单字体与模板/Windows 版不一致。
         run = first_para.add_run(lines[0].lstrip(' \t\u3000\u00A0'))
         run.font.size = Pt(font_size_pt)
-        run.font.name = ui_font('仿宋_GB2312')
-        run._element.rPr.rFonts.set(qn('w:eastAsia'), ui_font('仿宋_GB2312'))
-        run._element.rPr.rFonts.set(qn('w:ascii'), ui_font('仿宋_GB2312'))
-        run._element.rPr.rFonts.set(qn('w:hAnsi'), ui_font('仿宋_GB2312'))
+        run.font.name = '仿宋_GB2312'
+        run._element.rPr.rFonts.set(qn('w:eastAsia'), '仿宋_GB2312')
+        run._element.rPr.rFonts.set(qn('w:ascii'), '仿宋_GB2312')
+        run._element.rPr.rFonts.set(qn('w:hAnsi'), '仿宋_GB2312')
         
         # 处理其余段落
         for line in lines[1:]:
@@ -718,10 +721,10 @@ class WordGenerator:
             _format_paragraph(para)
             r = para.add_run(line.lstrip(' \t\u3000\u00A0'))
             r.font.size = Pt(font_size_pt)
-            r.font.name = ui_font('仿宋_GB2312')
-            r._element.rPr.rFonts.set(qn('w:eastAsia'), ui_font('仿宋_GB2312'))
-            r._element.rPr.rFonts.set(qn('w:ascii'), ui_font('仿宋_GB2312'))
-            r._element.rPr.rFonts.set(qn('w:hAnsi'), ui_font('仿宋_GB2312'))
+            r.font.name = '仿宋_GB2312'
+            r._element.rPr.rFonts.set(qn('w:eastAsia'), '仿宋_GB2312')
+            r._element.rPr.rFonts.set(qn('w:ascii'), '仿宋_GB2312')
+            r._element.rPr.rFonts.set(qn('w:hAnsi'), '仿宋_GB2312')
     
     @staticmethod
     def set_cell_text_with_custom_format(cell, text, font_size_pt=14, line_spacing_pt=None, alignment=None):
@@ -773,16 +776,17 @@ class WordGenerator:
             elif alignment == 'right':
                 paragraph_format.alignment = WD_ALIGN_PARAGRAPH.RIGHT
             
-            # 添加文本run
+            # 字体名固定为模板要求的「仿宋_GB2312」，不能用 ui_font() 做
+            # Linux 映射，否则写进 docx 的会是 Noto Serif CJK SC。
             run = paragraph.add_run(line)
             # 设置字体大小（使用传入的参数）
             run.font.size = Pt(font_size_pt)
             # 设置西文字体（通过font.name）
-            run.font.name = ui_font('仿宋_GB2312')
+            run.font.name = '仿宋_GB2312'
             # 设置完整的字体属性（确保中英文、数字、符号都使用仿宋）
-            run._element.rPr.rFonts.set(qn('w:eastAsia'), ui_font('仿宋_GB2312'))
-            run._element.rPr.rFonts.set(qn('w:ascii'), ui_font('仿宋_GB2312'))
-            run._element.rPr.rFonts.set(qn('w:hAnsi'), ui_font('仿宋_GB2312'))
+            run._element.rPr.rFonts.set(qn('w:eastAsia'), '仿宋_GB2312')
+            run._element.rPr.rFonts.set(qn('w:ascii'), '仿宋_GB2312')
+            run._element.rPr.rFonts.set(qn('w:hAnsi'), '仿宋_GB2312')
     
     @staticmethod
     def add_qrcode_to_document(doc, qr_data, size='small'):
@@ -1175,17 +1179,36 @@ class WordGenerator:
             # 注意：由于表格有单元格合并，实际列索引与视觉位置不同
             # 使用保持格式的方法填充
             
-            # 来文单位 → 行[0]列[2]（"来文单位"标签右侧）- 添加前置空格
-            self.set_cell_text_keep_format(table.rows[0].cells[2], word_data.get('姓名', ''), add_prefix_space=True)
-            
+            # 与 Windows 版 generate_from_pdf / generate_from_doc 保持一致：
+            # 来文单位统一填 "12345"，收文途径统一填 "信息中心"。
+            # 麒麟现场的热线工单是 WordML（扩展名 .docx），原来这里填了
+            # word_data['姓名'] / ['来源']（人名字、渠道名），与 Windows 版不一致。
+            self.set_cell_text_keep_format(table.rows[0].cells[2], "12345", add_prefix_space=True)
+
             # 收文日期 → 行[1]列[9]（"收文日期"标签右侧）- 居中
             self.set_cell_text_keep_format(table.rows[1].cells[9], current_date, alignment='center')
-            
+
+            # 来文字号 → 行[1]列[2]（"来文字号"标签右侧）- 居中，按字符数调字号
+            # Windows 的 generate_from_word 不填这一格（旧 docx 工单没有字号），
+            # 但麒麟的 WordML 工单第一行第二列就是工单编号，必须填进去。
+            lai_wen_zi_hao = word_data.get('来文字号') or word_data.get('工单编号', '')
+            char_count = len(lai_wen_zi_hao)
+            if char_count >= 33:
+                font_size = 9
+            elif 29 <= char_count <= 32:
+                font_size = 10.5
+            elif 25 <= char_count <= 28:
+                font_size = 12
+            else:
+                font_size = 14
+            self.set_cell_text_keep_format(table.rows[1].cells[2], lai_wen_zi_hao,
+                                           alignment='center', font_size_pt=font_size)
+
             # 来文类型 → 行[2]列[2]（"来文类型"标签右侧）- 居中
             self.set_cell_text_keep_format(table.rows[2].cells[2], "C", alignment='center')
-            
+
             # 收文途径 → 行[2]列[9]（"收文途径"标签右侧）- 居中
-            self.set_cell_text_keep_format(table.rows[2].cells[9], word_data.get('来源', ''), alignment='center')
+            self.set_cell_text_keep_format(table.rows[2].cells[9], "信息中心", alignment='center')
             
             # 收文编号 → 行[3]列[9]（"收文编号"标签右侧）- 居中，格式：C-年份后两位-编号
             year_suffix = str(now.year)[-2:]  # 获取年份后两位
