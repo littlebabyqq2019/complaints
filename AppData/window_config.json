@@ -1,4 +1,9 @@
 {
   "maximized": true,
-  "theme": "litera"
+  "theme": "litera",
+  "geometry": "1920x989+26+26",
+  "paned_positions": [
+    300,
+    540
+  ]
 }

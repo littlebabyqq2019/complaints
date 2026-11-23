@@ -376,11 +376,15 @@ def main():
                 _collect(c)
 
         _collect(bar)
-        expected = ['👁预览', '🖨打印', '💾保存', '🗑清空',
-                    '⬅上一个', '➡下一个', '📝手动添加批办单']
-        missing_btns = [t for t in expected if t not in btn_texts]
+        # 期望值按「纯中文标签」判断：Linux 上 emoji 会被 emoji_compat 剥掉
+        # （避免方框），Windows 上保留。直接比带 emoji 的字符串会在 CI 全挂。
+        expected = ['预览', '打印', '保存', '清空',
+                    '上一个', '下一个', '手动添加批办单']
+        missing_btns = [t for t in expected
+                        if not any(t in got for got in btn_texts)]
         if missing_btns:
-            raise AssertionError('底部按钮缺失: ' + ','.join(missing_btns))
+            raise AssertionError('底部按钮缺失: %s（实际: %s）'
+                                 % (','.join(missing_btns), btn_texts))
         if bar.winfo_manager() != 'pack':
             raise AssertionError('按钮栏未 pack')
 
