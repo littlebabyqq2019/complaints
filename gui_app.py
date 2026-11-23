@@ -771,12 +771,14 @@ class ComplaintManagementGUI:
         self.main_paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # 左侧面板：待处理文件列表
-        left_frame = ttk.Frame(self.main_paned, width=240)
+        # 240px 在麒麟的中文字体下装不下「待处理文件」标题 + 搜索框，
+        # 标题会被压到只露出半个字。给到 300px 起步。
+        left_frame = ttk.Frame(self.main_paned, width=300)
         self.main_paned.add(left_frame, weight=1)
         self.create_source_panel(left_frame)
         
         # 中间面板：待打印文件列表
-        middle_frame = ttk.Frame(self.main_paned, width=240)
+        middle_frame = ttk.Frame(self.main_paned, width=300)
         self.main_paned.add(middle_frame, weight=1)
         self.create_output_panel(middle_frame)
         
@@ -870,25 +872,35 @@ class ComplaintManagementGUI:
         # 标题行 - 使用Frame容器包含标题和搜索框，保持蓝色背景
         title_row = ttk.Frame(title_frame, bootstyle="primary")
         title_row.pack(fill=tk.X, padx=10, pady=8)
-        
+
         # 标题（左侧）
-        title = ttk.Label(title_row, text="📋 待处理文件", font=(ui_font('微软雅黑'), 12, 'bold'), 
-                         bootstyle="inverse-primary")
-        title.pack(side=tk.LEFT)
-        
+        # 麒麟反馈：「件」字只显示左半 —— 不是高度问题，而是**宽度**不够：
+        # 左侧面板初始只有 240px，标题 Label 默认 anchor=center，宽度不足时
+        # 从两侧同时被裁，于是右边半个字就没了。右侧搜索框又固定 width=25
+        # 抢走约 200px，标题只剩几十像素。
+        # 用 grid 分配：标题列 weight=1 且 sticky='w'（从左边起排，不被居中裁切），
+        # 搜索列 weight=0 固定宽度但收窄到 12 字符，保证标题优先拿到空间。
+        title_row.columnconfigure(0, weight=1)
+        title_row.columnconfigure(1, weight=0)
+
+        title = ttk.Label(title_row, text="📋 待处理文件", font=(ui_font('微软雅黑'), 12, 'bold'),
+                         bootstyle="inverse-primary", anchor='w')
+        title.grid(row=0, column=0, sticky='w', ipady=3)
+        self.source_title_label = title
+
         # 搜索框容器（右侧） - 使用白色背景的Frame模拟输入框外观
         search_container = ttk.Frame(title_row, bootstyle="light")
-        search_container.pack(side=tk.RIGHT, padx=(10, 0))
-        
+        search_container.grid(row=0, column=1, sticky='e', padx=(6, 0))
+
         # 搜索图标（在白色容器内左侧）- 使用深色让图标可见
         search_icon = ttk.Label(search_container, text="🔍", foreground="#666666", background="white")
         search_icon.pack(side=tk.LEFT, padx=(5, 2))
-        
+
         # 搜索输入框（在白色容器内，无边框样式）
         self.source_search_var = tk.StringVar()
         self.source_search_var.trace('w', self.highlight_source_search)
-        search_entry = ttk.Entry(search_container, textvariable=self.source_search_var, 
-                                width=25, bootstyle="light")
+        search_entry = ttk.Entry(search_container, textvariable=self.source_search_var,
+                                width=12, bootstyle="light")
         search_entry.pack(side=tk.LEFT, padx=(0, 5))
         
         # 文件列表
@@ -1006,16 +1018,19 @@ class ComplaintManagementGUI:
         title_frame.pack(fill=tk.X, padx=10, pady=5)
         
         # 左侧：文件标题
+        # anchor='w'：宽度不足时从左往右截断，而不是居中裁掉两端
         self.file_title_label = ttk.Label(title_frame, text="📝 请选择文件进行编辑", 
                                           font=(ui_font('微软雅黑'), 12, 'bold'),
-                                          bootstyle="inverse-secondary")
-        self.file_title_label.pack(side=tk.LEFT, padx=10, pady=8)
-        
+                                          bootstyle="inverse-secondary", anchor='w')
         # 右侧：收文编号显示
+        # 麒麟反馈：编号末位数字显示不全，同「件」字一样是**宽度**问题 ——
+        # 左侧标题太宽把右侧挤没了。先 pack 右侧让它优先占满自身所需宽度，
+        # 左侧再用 fill=X + expand 吃掉剩余空间，宽度不足时只截断左侧标题。
         self.receipt_number_label = ttk.Label(title_frame, text="", 
                                              font=(ui_font('微软雅黑'), 12, 'bold'),
-                                             bootstyle="inverse-info")
-        self.receipt_number_label.pack(side=tk.RIGHT, padx=10, pady=8)
+                                             bootstyle="inverse-info", anchor='e')
+        self.receipt_number_label.pack(side=tk.RIGHT, padx=10, pady=8, ipady=3)
+        self.file_title_label.pack(side=tk.LEFT, padx=10, pady=8, ipady=3, fill=tk.X, expand=True)
         
         # 创建Notebook（标签页）
         self.notebook = ttk.Notebook(parent)
@@ -2013,7 +2028,7 @@ class ComplaintManagementGUI:
         default_config = {
             'maximized': True,  # 默认最大化
             'geometry': '1400x900+100+100',  # 默认大小和位置
-            'paned_positions': [240, 480],  # 分割窗口位置
+            'paned_positions': [300, 540],  # 分割窗口位置（中文字体下留足标题宽度）
             'theme': 'litera'  # 默认主题
         }
         
@@ -2060,11 +2075,11 @@ class ComplaintManagementGUI:
                 try:
                     for i in range(2):
                         pos = self.main_paned.sashpos(i)
-                        # 边界检查：防止保存太极端的值
-                        if pos < 100:
-                            pos = 240
-                        if i == 1 and pos < 300:
-                            pos = 480
+                        # 边界检查：防止保存太极端的值（下限与 restore 保持一致）
+                        if pos < 300:
+                            pos = 300
+                        if i == 1 and pos < 360:
+                            pos = 540
                         sash_positions.append(pos)
                     config['paned_positions'] = sash_positions
                     print(f"保存分割条位置: {sash_positions}")
@@ -2138,11 +2153,13 @@ class ComplaintManagementGUI:
                 for i, pos in enumerate(positions):
                     if i < 2:  # 只有两个分割条
                         try:
-                            # 边界检查：防止分割条位置太极端
-                            if pos < 100:  # 左侧至少100像素
-                                pos = 240
-                            if i == 1 and pos < 300:  # 右侧至少300像素（包含左侧+中间）
-                                pos = 480
+                            # 边界检查：防止分割条位置太极端。
+                            # 左侧下限从 240 提到 300：麒麟中文字体下 240px
+                            # 装不下「待处理文件」标题 + 搜索框，字会被裁掉。
+                            if pos < 300:
+                                pos = 300
+                            if i == 1 and pos < 360:  # 中间列也要放得下列表
+                                pos = 540
                             
                             # 确保位置不超过窗口宽度
                             if pos > window_width - 100:
@@ -2176,8 +2193,8 @@ class ComplaintManagementGUI:
             try:
                 # 重置分割条位置
                 if self.main_paned:
-                    self.main_paned.sashpos(0, 240)
-                    self.main_paned.sashpos(1, 480)
+                    self.main_paned.sashpos(0, 300)
+                    self.main_paned.sashpos(1, 540)
                     self.log("窗口布局已重置为默认设置")
                     messagebox.showinfo("成功", "窗口布局已重置！\n\n分割条位置已恢复为默认值。")
             except Exception as e:
@@ -2302,7 +2319,7 @@ class ComplaintManagementGUI:
                     config = {
                         'maximized': True,
                         'geometry': '1400x900+100+100',
-                        'paned_positions': [240, 480]
+                        'paned_positions': [300, 540]
                     }
                     print("配置文件不存在，创建新配置")
                 
@@ -2407,10 +2424,10 @@ class ComplaintManagementGUI:
                     try:
                         for i in range(2):
                             pos = self.main_paned.sashpos(i)
-                            if pos < 100:
-                                pos = 240
-                            if i == 1 and pos < 300:
-                                pos = 480
+                            if pos < 300:
+                                pos = 300
+                            if i == 1 and pos < 360:
+                                pos = 540
                             sash_positions.append(pos)
                         config['paned_positions'] = sash_positions
                     except:

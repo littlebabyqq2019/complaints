@@ -312,6 +312,13 @@ class PDFExtractor:
                 else:
                     data['文件标题'] = ""
 
+                # pdfplumber 的空单元格会是 None，这里统一成字符串：
+                # 下游规则引擎做 `in` 判断、生成器做 str 操作，None 会直接抛异常，
+                # 表现为「PDF 不填拟办意见/办理情况」。
+                for _k in ('来文字号', '文件标题'):
+                    _v = data.get(_k)
+                    data[_k] = '' if _v is None else str(_v).strip()
+
                 print(f"PDF提取成功: 来文字号={data['来文字号']}, 文件标题={data['文件标题']}")
                 return data
 
@@ -670,7 +677,14 @@ class WordGenerator:
         
         # 先将单元格内容清空为一个空段落，避免遗留空段落（兼容Word 2007）
         cell.text = ''
-        
+
+        # 调用方可能传 None（提取器缺字段），统一当空串处理，避免
+        # 'NoneType' object has no attribute 'replace' 让整份文档生成失败
+        if text is None:
+            text = ''
+        elif not isinstance(text, str):
+            text = str(text)
+
         # 将文本按换行分割，并过滤掉空行（兼容全角空格/不间断空格）
         lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
         def _normalize_blank(s: str) -> str:

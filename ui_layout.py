@@ -219,3 +219,50 @@ def ensure_visible_bottom(parent, ttk_module, button_frame_builder):
     bar.pack(fill=tk.X, side=tk.BOTTOM, pady=(6, 0))
     button_frame_builder(bar)
     return bar
+
+
+def header_bar(ttk_module, parent):
+    """
+    创建一条「彩色标题条」容器，返回 (bar, row)。
+
+    麒麟反馈：标题条里的文字（"待处理文件" 的「件」、右上角收文编号末位数字）
+    下半截被裁掉。原因是彩色 Frame 的高度由 pack 计算，而中文字体在国产系统上
+    行高更大，Label 的请求高度超出 Frame 可用高度，Tk 就裁掉超出的部分。
+
+    解决办法：
+      1. 外层 bar 关掉 pack_propagate，避免被内部控件反向压缩；
+      2. 内层 row 用 grid 的单行布局，行权重大，保证纵向塞满；
+      3. 文字控件加 ipady，主动留出上下内边距。
+    调用方只需 pack 返回的 bar，并往 row 里放控件。
+    """
+    bar = ttk_module.Frame(parent)
+    bar.pack(fill=tk.X, padx=10, pady=5)
+    row = ttk_module.Frame(bar)
+    row.pack(fill=tk.X, padx=10, pady=6)
+    return bar, row
+
+
+def fit_text_widget(widget, extra_pady=2):
+    """
+    给标题文字补足纵向内边距，避免中文字形被父容器裁掉半行。
+    widget 需已 pack/grid。
+    """
+    try:
+        info = widget.pack_info()
+        pad = info.get('pady', 0)
+        if isinstance(pad, str):
+            parts = str(pad).split()
+            pady = int(parts[0]) if parts else 0
+        else:
+            pady = int(pad) if pad else 0
+        widget.pack_configure(pady=pady + extra_pady,
+                              ipady=extra_pady * 2)
+    except Exception:
+        try:
+            info = widget.grid_info()
+            pad = int(info.get('pady', 0) or 0)
+            widget.grid_configure(pady=pad + extra_pady,
+                                  ipady=extra_pady * 2)
+        except Exception:
+            pass
+    return widget

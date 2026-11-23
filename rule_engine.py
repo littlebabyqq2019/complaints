@@ -385,6 +385,12 @@ class RuleEngine:
         Returns:
             Optional[Dict]: 包含拟办意见、办理结果等字段的字典，未匹配返回None
         """
+        # 提取器可能给出 None（pdfplumber 空单元格、WordML 缺字段）。
+        # 下游全是字符串的 `in` / 拼接操作，None 会抛 TypeError 并被外层
+        # except 吞掉，表现为「文件处理了但拟办意见没填」。这里统一归一化。
+        filename = '' if filename is None else str(filename)
+        file_title = '' if file_title is None else str(file_title)
+
         if not self.rules:
             print("警告: 规则配置未加载")
             return None

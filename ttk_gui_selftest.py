@@ -219,6 +219,28 @@ def main():
             out("  OK   生成批办单：12345 / 信息中心 / 来文字号 / 仿宋_GB2312")
         except Exception as e:
             _fail("生成批办单字段与字体", e)
+
+        # 1b-3) PDF 提取器给出空/None 标题时，规则引擎仍要能匹配并填充
+        #       （pdfplumber 空单元格是 None，曾导致 TypeError 被吞、拟办意见不填）
+        try:
+            import tempfile as _tf2
+            from rule_engine import RuleEngine as _RE
+            for _bad in (None, ''):
+                _r = _RE().match_filling_rule('医政 测试工单.pdf', _bad)
+                if not _r or not (_r.get('拟办意见') or _r.get('办理结果')):
+                    raise AssertionError('标题=%r 时规则未匹配' % (_bad,))
+            _out2 = os.path.join(_tf2.gettempdir(), 'selftest_pdf_none.docx')
+            _g2 = _main.WordGenerator(output_dir=_tf2.gettempdir())
+            if not _g2.generate_from_pdf({'来文字号': 'X1', '文件标题': None},
+                                         1, 2, _out2, '医政 测试工单.pdf'):
+                raise AssertionError('generate_from_pdf 对 None 标题失败')
+            from docx import Document as _Doc2
+            _t2 = _Doc2(_out2).tables[0]
+            if not _t2.cell(6, 2).text.strip():
+                raise AssertionError('PDF 拟办意见未填充')
+            out("  OK   PDF 空标题仍能匹配规则并填充拟办意见")
+        except Exception as e:
+            _fail("PDF 空标题填充", e)
     except Exception as e:
         _fail("WordML 提取", e)
 
@@ -279,6 +301,46 @@ def main():
         out("RESULT: FAILED")
         flush_report()
         return 1
+
+    # 2b) 标题文字不被裁切（麒麟：「件」字只露左半、收文编号末位数字看不见）
+    try:
+        root.update()
+        lbl = getattr(app, 'source_title_label', None)
+        if lbl is None:
+            raise AssertionError('缺少 source_title_label')
+        w, req = lbl.winfo_width(), lbl.winfo_reqwidth()
+        if req <= 0:
+            raise AssertionError('标题宽度未计算')
+        if w < req * 0.95:
+            raise AssertionError('左侧标题被裁切: 实际 %d < 需要 %d' % (w, req))
+        if str(lbl.cget('anchor')) != 'w':
+            raise AssertionError('左侧标题 anchor 应为 w，实际 %r' % lbl.cget('anchor'))
+
+        app.update_next_receipt_number()
+        root.update_idletasks()
+        rl = app.receipt_number_label
+        rw, rreq = rl.winfo_width(), rl.winfo_reqwidth()
+        if rreq <= 0 or rw < rreq * 0.95:
+            raise AssertionError('收文编号被裁切: 实际 %d < 需要 %d' % (rw, rreq))
+        out("  OK   标题/收文编号完整显示（%dx%d / %dx%d）" % (w, req, rw, rreq))
+    except Exception as e:
+        _fail("标题文字完整显示", e)
+
+    # 2c) emoji 策略：不能出现「判定可显示但实际是方框」的情况
+    try:
+        import emoji_compat as _ec
+        if sys.platform.startswith('linux') and _ec.emoji_enabled():
+            # 只有在检测到真正的轮廓 emoji 字体时才允许保留
+            report = _ec.font_report()
+            if '轮廓 emoji 字体' not in report:
+                raise AssertionError('判定保留 emoji 但没找到轮廓字体: ' + report)
+        # 剥离函数对常见按钮文本必须正确
+        for src, exp in (('🖨打印', '打印'), ('📋 待处理文件', '待处理文件')):
+            if _ec.strip_emoji(src) != exp:
+                raise AssertionError('strip_emoji(%r) 结果错误' % src)
+        out("  OK   emoji 策略: " + _ec.status())
+    except Exception as e:
+        _fail("emoji 策略", e)
 
     # 3) 规则管理窗口（另一处 PanedWindow 使用者）
     try:

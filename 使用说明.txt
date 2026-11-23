@@ -90,3 +90,16 @@
    只走 LibreOffice：  COMPLAINTS_WPS_PREFERENCE=off ./启动GUI.sh
    没有 WPS 也没装 LibreOffice 时，仅老 .doc 无法处理，其余格式不受影响。
 
+九、界面显示不全 / 图标是方框
+   1) 标题或编号被截掉半个字
+      本版本已调整三栏默认宽度（左/中各 300px）与标题排版方式，
+      标题从左起排、宽度不足只截右侧；收文编号优先占位，保证末位可见。
+      如果升级后仍是老样子，请删掉 AppData/window_config.json 里的
+      "paned_positions"，或在「工具」里执行一次「重置窗口布局」。
+   2) 按钮前面的图标显示成方框
+      系统没有可被 Tk 使用的 emoji 字体，程序会自动去掉图标只留文字。
+      想让图标显示：安装轮廓版 emoji 字体（如 fonts-symbola）后
+         COMPLAINTS_EMOJI=on ./启动GUI.sh
+      想强制去掉：COMPLAINTS_EMOJI=off ./启动GUI.sh
+      启动日志里有 emoji=... 一行说明当前判定。
+

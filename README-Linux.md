@@ -178,6 +178,17 @@ COMPLAINTS_WPS_PREFERENCE=wps ./启动GUI.sh   # 强制只走 WPS 验证通道
 `COMPLAINTS_EMOJI=auto|on|off` 可覆盖 emoji 策略（默认 auto）。
 启动日志记录 `emoji=auto/剥掉（避免方框）`。
 
+## 三之六、第二轮现场问题（2026-11-23）
+
+| 现场现象 | 根因 | 修复 |
+| --- | --- | --- |
+| PDF 不填拟办意见/办理情况，Word 正常 | pdfplumber 的空单元格返回 `None`，`PDFExtractor` 直接把它当作「文件标题」传出；`RuleEngine.match_filling_rule` 内部做字符串 `in` 判断时抛 `TypeError: argument of type 'NoneType' is not iterable`，被外层 `except` 吞掉，于是规则没匹配上、两栏留空。Word 分支的 `标题` 一定非空，所以不受影响 | 三处归一化：`PDFExtractor` 把 `来文字号/文件标题` 统一成 `str.strip()`；`RuleEngine.match_filling_rule` 入口把 `filename/file_title` 的 `None` 转空串；`set_cell_text_keep_format` 对 `text=None` 兜底 |
+| 按钮图标还是有的不显示 | emoji 探测把 `DejaVu` / `FreeSerif` 当成「有 emoji 字体」，但它们只覆盖极少数符号（⚙ ✓ ➡），覆盖不了 🖨 💾 📝 📋，于是判定为「可显示」却仍是方框 | 探测只认真正的轮廓 emoji 字体（Symbola / EmojiOne / Twemoji / Noto Emoji 等）；同时把补丁从「仅创建时」扩展到 `configure`/`config`，覆盖 `label.config(text="📋 …")` 这类**建好之后**更新文字的路径（收文编号就是这么更新的） |
+| 右上角「下一个收文编号」末位数字显示不全 | 宽度问题：左侧「📝 请选择文件进行编辑」太长，`pack` 时把右侧 Label 挤没 | 先 `pack` 右侧让编号优先占位，左侧 `fill=X + expand` 吃掉剩余并按需截断；两侧分别设 `anchor='e'` / `'w'`，宽度不足时只裁左侧 |
+| 左上角「待处理文件」的「件」字只显示一半 | 同样是宽度：左侧栏初始 240px，标题 + `width=25` 的搜索框放不下；Label 默认 `anchor=center`，宽度不足时**从两侧同时裁切**，右边的「件」就没了 | 标题行改 `grid` 且标题列 `weight=1 / sticky='w'`（从左起排不居中裁切），搜索框收窄到 `width=12`；左/中栏默认宽度 240→300，分割条下限与保存时的夹取同步调整 |
+
+搜索结果截图核对点：左侧标题完整、收文编号完整到末位、按钮无方框。
+
 ## 四、目录与数据
 
 ```

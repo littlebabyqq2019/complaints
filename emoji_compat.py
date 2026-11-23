@@ -35,11 +35,23 @@ _EMOJI_RE = re.compile(
     '[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u2190-\u21FF\u2300-\u23FF]'
 )
 
-# 只有轮廓（TTF/OTF）emoji 字体才能被 Tk 8.6 使用；位图 CBDT 不算。
+# 只有真正带 emoji 字形、且是轮廓（TTF/OTF）的字体才能被 Tk 8.6 使用。
+# 之前把 DejaVu / FreeSerif 也算作「有 emoji 字体」，但这两个只覆盖极少数
+# 符号（⚙ ✓ ➡），覆盖不了 🖨 💾 📝 📋 这类表情 emoji，于是判定为「可显示」
+# 却仍然一片方框——这就是「有些按钮图标还是不显示」的原因。
+# 现在只认真正的 emoji 字体。
 _OUTLINE_EMOJI_FONT_HINTS = (
-    "symbola", "emojione", "twemoji", "noto emoji", "notoemoji",
-    "free Serif", "dejavu", "unifont",
+    "symbola",        # 覆盖最全的轮廓符号字体，麒麟上最常装
+    "emojione",
+    "twemoji",
+    "noto emoji",     # 轮廓版（不是 Noto Color Emoji）
+    "notoemoji",
+    "openmoji",
+    "emojisymbols",
 )
+
+# 位图（CBDT/SBIX）emoji 字体 Tk 8.6 渲染不了，出现即视为不可用
+_BITMAP_EMOJI_HINTS = ("color emoji", "segoe ui emoji")
 
 _enabled = None
 _patched = False
@@ -51,20 +63,45 @@ def _env_pref():
     return (os.environ.get('COMPLAINTS_EMOJI') or 'auto').strip().lower()
 
 
-def _has_outline_emoji_font():
-    """用 fc-list 判断是否存在 Tk 能渲染的轮廓 emoji 字体。"""
+def _font_families():
+    """返回系统字体家族名（小写）。没有 fc-list 时返回空串。"""
     if not shutil.which('fc-list'):
-        return False
+        return ''
     try:
         r = subprocess.run(['fc-list', ':', 'family'], stdout=subprocess.PIPE,
                            stderr=subprocess.DEVNULL, timeout=8)
-        text = r.stdout.decode('utf-8', 'ignore').lower()
-        for hint in _OUTLINE_EMOJI_FONT_HINTS:
-            if hint in text:
-                return True
+        return r.stdout.decode('utf-8', 'ignore').lower()
     except Exception:
-        pass
-    return False
+        return ''
+
+
+def _has_outline_emoji_font():
+    """
+    是否存在 Tk 8.6 能渲染的 **轮廓** emoji 字体。
+
+    只装 Noto Color Emoji（位图）不算 —— Tk 画不出来，仍会显示方框。
+    """
+    text = _font_families()
+    if not text:
+        return False
+    # 先排除「只有位图」的情况：命中了位图字体但没有任何轮廓字体
+    has_outline = any(h in text for h in _OUTLINE_EMOJI_FONT_HINTS)
+    return has_outline
+
+
+def font_report():
+    """诊断用：说明为什么保留或剥掉 emoji。"""
+    text = _font_families()
+    if not text:
+        return "未找到 fc-list，无法探测 emoji 字体"
+    found = [h for h in _OUTLINE_EMOJI_FONT_HINTS if h in text]
+    bitmap = [h for h in _BITMAP_EMOJI_HINTS if h in text]
+    parts = []
+    if found:
+        parts.append("轮廓 emoji 字体: " + ", ".join(found))
+    if bitmap:
+        parts.append("位图 emoji 字体(Tk 不可用): " + ", ".join(bitmap))
+    return "; ".join(parts) if parts else "无 emoji 字体"
 
 
 def emoji_enabled():
@@ -104,36 +141,62 @@ def status():
 
 def install_emoji_compat(ttk_module):
     """
-    给 ttkbootstrap 的常用文本控件打轻量补丁：创建时统一过滤 emoji。
-    只包 __init__ 的 text 关键字；不影响任何其它参数与返回值。
+    给 ttkbootstrap 的常用文本控件打轻量补丁：创建 **以及后续改文本** 时
+    都统一过滤 emoji。
+
+    只包 `__init__` 不够：代码里大量 `label.config(text="📋 ...")` 是在
+    控件建好之后更新文字的（例如收文编号），那些路径绕过了创建时的过滤，
+    于是麒麟上仍会显示方框。这里同时包 `configure`（`config` 是它的别名）。
     """
-    global _patched, _stripped_count
+    global _patched
     if _patched or emoji_enabled():
         return _patched
     _patched = True
 
+    def _fix_kwargs(kwargs):
+        text = kwargs.get('text')
+        if isinstance(text, str):
+            fixed = strip_emoji(text)
+            if fixed != text:
+                kwargs['text'] = fixed
+                _counter[0] += 1
+
+    def _make_init(orig):
+        def __init__(self, *args, **kwargs):
+            _fix_kwargs(kwargs)
+            return orig(self, *args, **kwargs)
+        __init__.__name__ = getattr(orig, '__name__', '__init__')
+        __init__.__doc__ = orig.__doc__
+        return __init__
+
+    def _make_configure(orig):
+        def configure(self, cnf=None, **kwargs):
+            # 形式一：w.configure(text="📋 x")  -> cnf 为 None，值在 kwargs
+            _fix_kwargs(kwargs)
+            # 形式二：w.configure('text', '📋 x') -> cnf='text'，值在 kwargs['value']
+            if cnf == 'text' and 'value' in kwargs and isinstance(kwargs['value'], str):
+                fixed = strip_emoji(kwargs['value'])
+                if fixed != kwargs['value']:
+                    kwargs['value'] = fixed
+                    _counter[0] += 1
+            return orig(self, cnf, **kwargs)
+        configure.__name__ = getattr(orig, '__name__', 'configure')
+        configure.__doc__ = orig.__doc__
+        return configure
+
     for name in ('Button', 'Label', 'Checkbutton', 'Radiobutton',
-                 'LabelFrame', 'ToggleButton'):
+                 'LabelFrame', 'ToggleButton', 'Treeview', 'Notebook'):
         cls = getattr(ttk_module, name, None)
         if cls is None:
             continue
-        original_init = cls.__init__
-
-        def _make_init(orig):
-            def __init__(self, *args, **kwargs):
-                text = kwargs.get('text')
-                if isinstance(text, str):
-                    fixed = strip_emoji(text)
-                    if fixed != text:
-                        kwargs['text'] = fixed
-                        _counter[0] += 1
-                return orig(self, *args, **kwargs)
-            __init__.__name__ = getattr(orig, '__name__', '__init__')
-            __init__.__doc__ = orig.__doc__
-            return __init__
-
         try:
-            cls.__init__ = _make_init(original_init)
+            cls.__init__ = _make_init(cls.__init__)
+        except Exception:
+            pass
+        try:
+            if getattr(cls, 'configure', None) is not None:
+                cls.configure = _make_configure(cls.configure)
+                cls.config = cls.configure
         except Exception:
             pass
 
