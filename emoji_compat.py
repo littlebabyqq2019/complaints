@@ -170,16 +170,29 @@ def install_emoji_compat(ttk_module):
         return __init__
 
     def _make_configure(orig):
-        def configure(self, cnf=None, **kwargs):
-            # 形式一：w.configure(text="📋 x")  -> cnf 为 None，值在 kwargs
-            _fix_kwargs(kwargs)
-            # 形式二：w.configure('text', '📋 x') -> cnf='text'，值在 kwargs['value']
-            if cnf == 'text' and 'value' in kwargs and isinstance(kwargs['value'], str):
-                fixed = strip_emoji(kwargs['value'])
-                if fixed != kwargs['value']:
-                    kwargs['value'] = fixed
+        def configure(self, *args, **kwargs):
+            # ttk 的 configure 有三种形态：
+            #   w.configure(text="📋 x")            -> 全关键字
+            #   w.configure('text', '📋 x')         -> 位置 option + value
+            #   w.configure({'text': '📋 x'})       -> 单个 dict
+            # ttkbootstrap 内部用前两种，位置形式必须原样透传，不能吞参数，
+            # 否则会报 "takes from 1 to 2 positional arguments but 3 were given"。
+            new_args = list(args)
+            if len(new_args) >= 2 and new_args[0] == 'text' and isinstance(new_args[1], str):
+                fixed = strip_emoji(new_args[1])
+                if fixed != new_args[1]:
+                    new_args[1] = fixed
                     _counter[0] += 1
-            return orig(self, cnf, **kwargs)
+            elif new_args and isinstance(new_args[0], dict):
+                d = dict(new_args[0])
+                if isinstance(d.get('text'), str):
+                    fixed = strip_emoji(d['text'])
+                    if fixed != d['text']:
+                        d['text'] = fixed
+                        _counter[0] += 1
+                new_args[0] = d
+            _fix_kwargs(kwargs)
+            return orig(self, *new_args, **kwargs)
         configure.__name__ = getattr(orig, '__name__', 'configure')
         configure.__doc__ = orig.__doc__
         return configure
