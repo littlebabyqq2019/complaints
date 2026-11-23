@@ -1193,18 +1193,19 @@ class WordGenerator:
             # 注意：由于表格有单元格合并，实际列索引与视觉位置不同
             # 使用保持格式的方法填充
             
-            # 与 Windows 版 generate_from_pdf / generate_from_doc 保持一致：
-            # 来文单位统一填 "12345"，收文途径统一填 "信息中心"。
-            # 麒麟现场的热线工单是 WordML（扩展名 .docx），原来这里填了
-            # word_data['姓名'] / ['来源']（人名字、渠道名），与 Windows 版不一致。
+            # 三种源文件（PDF / .docx / .doc）走的是同一套工单格式，
+            # 都有「工单编号」在表格第一行第二列，批次填充规则完全一致：
+            # 来文单位=12345、收文途径=信息中心、来文字号=工单编号。
+            # （历史遗留：本函数早期按「旧 docx 才填姓名/来源」写过，
+            #   现场已确认不存在那种旧格式，故与 pdf/doc 分支统一。）
             self.set_cell_text_keep_format(table.rows[0].cells[2], "12345", add_prefix_space=True)
 
             # 收文日期 → 行[1]列[9]（"收文日期"标签右侧）- 居中
             self.set_cell_text_keep_format(table.rows[1].cells[9], current_date, alignment='center')
 
             # 来文字号 → 行[1]列[2]（"来文字号"标签右侧）- 居中，按字符数调字号
-            # Windows 的 generate_from_word 不填这一格（旧 docx 工单没有字号），
-            # 但麒麟的 WordML 工单第一行第二列就是工单编号，必须填进去。
+            # 值来自工单表格第一行第二列（WordMLExtractor 提取为「工单编号」，
+            # 统一映射到「来文字号」）。
             lai_wen_zi_hao = word_data.get('来文字号') or word_data.get('工单编号', '')
             char_count = len(lai_wen_zi_hao)
             if char_count >= 33:

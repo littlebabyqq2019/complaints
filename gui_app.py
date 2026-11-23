@@ -1214,12 +1214,10 @@ class ComplaintManagementGUI:
                               bootstyle="success-outline").pack(side=tk.LEFT, padx=2)
         
         # 底部按钮区域：固定在窗口底部的 action bar，不随表单滚动，
-        # 也不会被表单高度挤出屏幕。分两行排布，窄屏时按钮不会横向溢出。
+        # 也不会被表单高度挤出屏幕。
         bottom_frame = self.edit_action_bar
         row1 = ttk.Frame(bottom_frame)
         row1.pack(fill=tk.X)
-        row2 = ttk.Frame(bottom_frame)
-        row2.pack(fill=tk.X, pady=(4, 0))
         
         # 第一行：预览、打印、保存、清空
         left_buttons = ttk.Frame(row1)
@@ -1230,19 +1228,14 @@ class ComplaintManagementGUI:
         ttk.Button(left_buttons, text="💾保存", command=self.save_current_file, width=7, bootstyle="primary").pack(side=tk.LEFT, padx=2, ipady=5)
         ttk.Button(left_buttons, text="🗑清空", command=self.clear_form, width=7, bootstyle="danger").pack(side=tk.LEFT, padx=2, ipady=5)
         
-        # 导航按钮
+        # 导航按钮 + 手动添加（按现场要求：手动添加放在「下一个」右侧）
         nav_frame = ttk.Frame(row1)
         nav_frame.pack(side=tk.LEFT, padx=20)
         
         ttk.Button(nav_frame, text="⬅上一个", command=self.load_previous_file, width=9, bootstyle="secondary").pack(side=tk.LEFT, padx=3, ipady=6)
         ttk.Button(nav_frame, text="➡下一个", command=self.load_next_file, width=9, bootstyle="secondary").pack(side=tk.LEFT, padx=3, ipady=6)
-        
-        # 第二行：手动添加按钮（独立一行，任何窗口宽度都能完整点得到）
-        right_buttons = ttk.Frame(row2)
-        right_buttons.pack(side=tk.LEFT)
-        
-        ttk.Button(right_buttons, text="📝手动添加批办单", command=self.manual_add_document, 
-                   width=15, bootstyle="warning").pack(side=tk.LEFT, ipady=6)
+        ttk.Button(nav_frame, text="📝手动添加批办单", command=self.manual_add_document,
+                   width=15, bootstyle="warning").pack(side=tk.LEFT, padx=(12, 3), ipady=6)
         
     def create_log_tab(self, parent):
         """创建日志标签页"""

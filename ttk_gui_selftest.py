@@ -383,7 +383,14 @@ def main():
             raise AssertionError('底部按钮缺失: ' + ','.join(missing_btns))
         if bar.winfo_manager() != 'pack':
             raise AssertionError('按钮栏未 pack')
-        out("  OK   编辑页底部按钮条（%d 个按钮，固定可见）" % len(btn_texts))
+
+        # 现场要求：「手动添加批办单」紧跟在「下一个」右侧
+        nxt = next((i for i, t in enumerate(btn_texts) if '下一个' in t), None)
+        add = next((i for i, t in enumerate(btn_texts) if '手动添加批办单' in t), None)
+        if nxt is None or add is None or add != nxt + 1:
+            raise AssertionError('「手动添加批办单」应紧邻「下一个」右侧，实际顺序: %s'
+                                 % btn_texts)
+        out("  OK   编辑页底部按钮条（%d 个按钮，固定可见，顺序正确）" % len(btn_texts))
     except Exception as e:
         _fail("编辑页底部按钮条", e)
 
