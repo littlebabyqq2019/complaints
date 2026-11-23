@@ -164,6 +164,39 @@ def main():
     except Exception as e:
         _fail("WPS 调用层", e)
 
+    # 1d) 打印链路：转换失败绝不能把 docx 递给 lp
+    #     现场报错「/bin/lp: 不支持的 document-format application/vnd...wordprocessingml」
+    #     根因就是 word_to_pdf 返回 None 后 target 仍是 docx。
+    try:
+        import platform_compat as _pc
+        _saved = (_pc.IS_WINDOWS, _pc.word_to_pdf, _pc._run_office, _pc.shutil.which)
+        _pc.IS_WINDOWS = False
+        _pc.word_to_pdf = lambda *a, **k: None
+        _lp = {'called': False}
+
+        class _R:
+            returncode = 0
+            stdout = b'ok'
+            stderr = b''
+
+        def _fake_run(cmd, timeout=120):
+            if cmd and str(cmd[0]).endswith('lp'):
+                _lp['called'] = True
+            return _R()
+
+        _pc._run_office = _fake_run
+        _pc.shutil.which = lambda n: ('/usr/bin/lp' if n == 'lp'
+                                      else _saved[3](n))
+        _ok, _info = _pc.print_file('/nonexistent.docx')
+        _pc.IS_WINDOWS, _pc.word_to_pdf, _pc._run_office, _pc.shutil.which = _saved
+        if _ok:
+            raise AssertionError('转换失败时不应返回打印成功')
+        if _lp['called']:
+            raise AssertionError('转换失败时把原文件递给了 lp（CUPS 会报 MIME 不支持）')
+        out("  OK   打印链路：转换失败时拒绝打印 docx（不喂给 lp）")
+    except Exception as e:
+        _fail("打印链路保护", e)
+
     # 1b) WordML（Word 2003 XML）提取链路：现场「处理 Word 提示提取数据失败」
     #     根因是工单导出文件扩展名 .docx 但内容是 XML 单文件，python-docx 读不了。
     try:

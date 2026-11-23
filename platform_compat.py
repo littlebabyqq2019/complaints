@@ -292,6 +292,9 @@ def word_to_pdf(word_path, out_pdf_path=None):
 
     tmp_dir = tempfile.mkdtemp(prefix="pdfconv_")
     try:
+        # 顺序很关键：LibreOffice 的 --convert-to 是官方支持的可靠接口；
+        # WPS Linux 没有无头转换能力（传 --convert-to pdf 会被它当成文件名，
+        # 弹「无法打开 pdf"」）。所以 LO 优先，WPS 只在探测为真时才试。
         soffice = _find_soffice()
         candidates = []
         if soffice:
@@ -301,10 +304,20 @@ def word_to_pdf(word_path, out_pdf_path=None):
                 "--headless", "--norestore", "--invisible", "--nodefault", "--nolockcheck",
                 "--convert-to", "pdf:writer_pdf_Export", "--outdir", tmp_dir, word_path,
             ])
-        wps = _find_wps()
-        if wps:
-            # 让 wps_compat 用统一的参数候选 / HOME 隔离 / 超时策略去跑；
-            # 旧写法 `wps --headless --convert-to pdf` 多数 WPS Linux 版不认。
+
+        for cmd in candidates:
+            _run_office(cmd)
+            produced = os.path.join(tmp_dir, base + ".pdf")
+            if os.path.isfile(produced) and os.path.getsize(produced) > 0:
+                if os.path.abspath(produced) != out_pdf_path:
+                    if os.path.exists(out_pdf_path):
+                        os.remove(out_pdf_path)
+                    shutil.move(produced, out_pdf_path)
+                return out_pdf_path
+
+        # LibreOffice 没装或转换失败：再问 wps_compat（内部有试转探测，
+        # 不支持的版本会直接返回 None，不会反复弹窗）
+        if _find_wps():
             try:
                 import wps_compat
                 wps_out = wps_compat.word_to_pdf_with_wps(word_path, out_dir=tmp_dir)
@@ -316,17 +329,11 @@ def word_to_pdf(word_path, out_pdf_path=None):
                     return out_pdf_path
             except Exception:
                 pass
-            # 兼容少数确实支持 LibreOffice 参数的版本
-            candidates.append([
-                wps, "--headless", "--convert-to", "pdf", "--outdir", tmp_dir, word_path,
-            ])
+
         uno = shutil.which("unoconv")
         if uno:
-            candidates.append([uno, "-f", "pdf", "-o",
-                               os.path.join(tmp_dir, base + ".pdf"), word_path])
-
-        for cmd in candidates:
-            _run_office(cmd)
+            _run_office([uno, "-f", "pdf", "-o",
+                         os.path.join(tmp_dir, base + ".pdf"), word_path])
             produced = os.path.join(tmp_dir, base + ".pdf")
             if os.path.isfile(produced) and os.path.getsize(produced) > 0:
                 if os.path.abspath(produced) != out_pdf_path:
@@ -366,17 +373,8 @@ def doc_to_docx(doc_path, out_dir):
         except Exception:
             pass
 
-    # WPS 是统信/麒麟的预装软件，优先用它（不依赖 LibreOffice）。
-    # COMPLAINTS_WPS_PREFERENCE=off 可强制只用 LibreOffice。
-    if os.environ.get('COMPLAINTS_WPS_PREFERENCE', '').strip().lower() != 'off' and _find_wps():
-        try:
-            import wps_compat
-            converted = wps_compat.doc_to_docx_with_wps(doc_path, out_dir=out_dir)
-            if converted and os.path.isfile(converted) and os.path.getsize(converted) > 0:
-                return converted
-        except Exception:
-            pass
-
+    # 顺序：LibreOffice 优先（官方支持 --convert-to），WPS 作为兜底。
+    # 理由同 word_to_pdf：WPS Linux 无无头转换接口，先试它会弹窗且拖慢批量处理。
     soffice = _find_soffice()
     if soffice:
         profile = "file://" + os.path.join(out_dir, "lo_profile")
@@ -387,14 +385,32 @@ def doc_to_docx(doc_path, out_dir):
         ])
         if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
             return out_path
+
+    # LibreOffice 不可用/失败：再试 WPS（内部有试转探测，不支持时直接返回 None）
+    if os.environ.get('COMPLAINTS_WPS_PREFERENCE', '').strip().lower() != 'off' and _find_wps():
+        try:
+            import wps_compat
+            converted = wps_compat.doc_to_docx_with_wps(doc_path, out_dir=out_dir)
+            if converted and os.path.isfile(converted) and os.path.getsize(converted) > 0:
+                return converted
+        except Exception:
+            pass
     return None
 
 
 def print_file(path):
     """
     打印单个文档，等价 Windows 的 win32api.ShellExecute(0,"print",...)。
-    Linux 下先用 LibreOffice/WPS 把 Word 转 PDF，再交给 CUPS 的 lp；
-    PDF 直接 lp。返回 (是否成功, 说明文字)。
+
+    Linux 下必须先转成 PDF 再交给 CUPS 的 lp：CUPS 不认识 docx 的
+    MIME 类型，直接递 .docx 会报
+        /bin/lp: 不支持的 document-format
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    这正是麒麟现场的报错。所以转换失败时**直接返回失败**，
+    绝不把原 Word 文件塞给 lp。
+
+    PDF 直接 lp。
+    返回 (是否成功, 说明文字)。
     """
     path = os.path.abspath(path)
     if IS_WINDOWS:
@@ -408,12 +424,18 @@ def print_file(path):
     tmp_dir = None
     target = path
     try:
-        if path.lower().endswith((".doc", ".docx")):
+        if path.lower().endswith((".doc", ".docx", ".wps", ".rtf", ".odt")):
             tmp_dir = tempfile.mkdtemp(prefix="printconv_")
             base = os.path.splitext(os.path.basename(path))[0]
             pdf = word_to_pdf(path, os.path.join(tmp_dir, base + ".pdf"))
-            if pdf:
-                target = pdf
+            if not pdf or not os.path.isfile(pdf) or os.path.getsize(pdf) <= 0:
+                # 关键：转换失败必须直接报错，不能拿 docx 去喂 lp
+                return (False,
+                        "无法把 Word 转成 PDF，打印已中止。\n"
+                        "请安装 LibreOffice（推荐）或 WPS：\n"
+                        "  sudo apt install -y libreoffice-writer\n"
+                        "或先用「批量转PDF」手动转换后再打印。")
+            target = pdf
 
         lp = shutil.which("lp")
         if not lp:

@@ -189,6 +189,47 @@ COMPLAINTS_WPS_PREFERENCE=wps ./启动GUI.sh   # 强制只走 WPS 验证通道
 
 搜索结果截图核对点：左侧标题完整、收文编号完整到末位、按钮无方框。
 
+## 三之七、打印链路修复（2026-11-23）
+
+现场点「打印」报两个错：
+
+```
+/bin/lp：不支持的 document-format
+"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+```
+
+```
+WPS 文字：无法打开 "pdf"。
+此文件可能被重命名、删除或移动了位置。
+```
+
+两个错是同一根源的两面：
+
+| 环节 | 问题 | 修复 |
+| --- | --- | --- |
+| WPS 转换 | `wps_compat` 伪造了 LibreOffice 的 `--convert-to pdf` 参数。**WPS Linux 没有无头转换接口**，它把 `pdf` 当成要打开的文件名，于是弹「无法打开 pdf」 | 去掉伪造参数；WPS 只在**真实试转成功**时才启用，且结论缓存 —— 不支持的版本只探测一次，之后不再启动进程、不再弹窗 |
+| 打印兜底 | `word_to_pdf` 返回 `None`（转换失败）后，`print_file` 里 `target` 仍是原 `.docx`，直接递给了 `lp`；CUPS 不认识 docx 的 MIME 类型，报「不支持的 document-format」 | 转换失败**直接返回失败并给出可操作提示**，绝不再把 Word 文件交给 `lp` |
+| 转换优先级 | 原来 WPS 优先，每次都先启动 WPS 试错 | 改为 **LibreOffice 优先**（`--convert-to` 是官方接口，唯一可靠），WPS 仅作兜底 |
+
+`print_file` 现在的行为：
+
+```
+.docx / .doc / .wps / .rtf / .odt  ->  必须先转 PDF，转不出来就报错中止
+.pdf                              ->  直接 lp
+转换失败提示：「无法把 Word 转成 PDF，打印已中止。请安装 LibreOffice（推荐）…」
+```
+
+**现场要做的**：打印 Word 需要系统里有 LibreOffice（WPS 本身不具备命令行转换能力）：
+
+```bash
+sudo apt install -y libreoffice-writer
+```
+
+装完 `./诊断.sh` 里 `LO` 那行会显示 soffice 路径，打印即可用。
+若不想装 LibreOffice，可以先用「批量转PDF」把批办单转成 PDF 再打印。
+
+CI 断言：模拟「转换失败」时必须返回失败且**不调用 lp**，防止这个 bug 回归。
+
 ## 四、目录与数据
 
 ```

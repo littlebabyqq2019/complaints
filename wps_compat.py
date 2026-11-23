@@ -128,21 +128,26 @@ def reset_cache():
 # 转换
 # ---------------------------------------------------------------------------
 
-# 不同 WPS 版本接受的命令行差异很大，按「成功率从高到低」排列，逐个试。
-# {exe} / {src} / {out} / {fmt} 为占位符。
+# WPS Linux 命令行说明（重要）
+# ---------------------------------------------------------------------------
+# 与 LibreOffice 不同，WPS Office for Linux **没有** `--convert-to` 这类无头
+# 转换接口。把 `--convert-to pdf` 传给它，它会把 "pdf" 当成要打开的文件名，
+# 于是弹出「WPS 文字：无法打开 "pdf"」。麒麟现场就是这样。
+#
+# 因此这里不再伪造 LibreOffice 风格参数。真正的转换只走两条路：
+#   1. 系统装了 LibreOffice -> 用 soffice --convert-to（可靠）
+#   2. 某些政企定制版 WPS 确实带 LO 兼容层 -> 用 _probe_convert_support()
+#      先做一次真实试转，成功才认为支持
+# 探测结果缓存，避免每个文件都试错并弹窗。
 _ARG_TEMPLATES = (
-    # 新版 WPS Linux（兼容 LibreOffice 风格）
+    # 仅少数带 LO 兼容层的定制版可用；必须配合试转探测才会启用
     ["{exe}", "--headless", "--norestore", "--invisible",
      "--convert-to", "{fmt}", "--outdir", "{out}", "{src}"],
-    # 带显式输出文件
     ["{exe}", "--headless", "--convert-to", "{fmt}", "-o", "{outfile}", "{src}"],
-    # WPS 传统 -f 打开后转换
-    ["{exe}", "-f", "{src}", "--convert-to", "{fmt}", "--outdir", "{out}"],
-    # 部分政企定制版用 -convert-to（单横线）
-    ["{exe}", "--headless", "-convert-to", "{fmt}", "--outdir", "{out}", "{src}"],
-    # 只带 --convert-to 的极简形式
-    ["{exe}", "--convert-to", "{fmt}", "--outdir", "{out}", "{src}"],
 )
+
+# 是否支持无头转换：None=未探测，True/False=已探测结果
+_CONVERT_SUPPORTED = None
 
 # WPS 对格式名的写法也不统一
 _FMT_ALIASES = {
@@ -201,7 +206,13 @@ def convert_with_wps(src, fmt="docx", out_dir=None, timeout=45):
 
     成功返回转换产物路径，失败返回 None。结果驱动：不看返回码，
     只看目标文件是否真的出现且非空。自动清理临时目录（保留产物）。
+
+    注意：WPS Linux 一般**不支持**无头转换（见 _ARG_TEMPLATES 顶部说明）。
+    因此第一次调用会先做一次试转探测，失败就永久返回 None，
+    不再反复启动 WPS —— 否则每个文件都会弹一次「无法打开 pdf」。
     """
+    global _CONVERT_SUPPORTED
+
     src = os.path.abspath(src)
     if not os.path.isfile(src):
         return None
@@ -211,6 +222,10 @@ def convert_with_wps(src, fmt="docx", out_dir=None, timeout=45):
 
     fmt = fmt.lower()
     if fmt not in _FMT_ALIASES:
+        return None
+
+    # 已知该 WPS 不支持转换：直接返回，避免又弹一次错误框
+    if _CONVERT_SUPPORTED is False:
         return None
 
     keep_dir = out_dir is not None
@@ -255,8 +270,14 @@ def convert_with_wps(src, fmt="docx", out_dir=None, timeout=45):
                             produced = p
                             break
                 if produced:
+                    _CONVERT_SUPPORTED = True
                     result_path = produced
                     return result_path
+
+        # 所有参数候选都没产出：记下「这个 WPS 不支持无头转换」，
+        # 后续调用直接走 LibreOffice，不再启动 WPS 弹窗。
+        if _CONVERT_SUPPORTED is None:
+            _CONVERT_SUPPORTED = False
     finally:
         shutil.rmtree(home_dir, ignore_errors=True)
         if not keep_dir:

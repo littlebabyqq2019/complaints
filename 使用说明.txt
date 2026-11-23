@@ -103,3 +103,16 @@
       想强制去掉：COMPLAINTS_EMOJI=off ./启动GUI.sh
       启动日志里有 emoji=... 一行说明当前判定。
 
+十、打印报错
+   1) /bin/lp：不支持的 document-format ...wordprocessingml...
+      原因：Word 没能转成 PDF，程序把 .docx 直接交给了打印系统。
+            本版本已改为「转不出来就报错中止」，不会再出现这条。
+      解决：安装 LibreOffice（它才有命令行转换能力）
+         sudo apt install -y libreoffice-writer
+      装完 ./诊断.sh 里 LO 那行应显示 soffice 路径。
+      不想装也可以先用「批量转PDF」转成 PDF 再打印。
+   2) WPS 弹「无法打开 "pdf"」
+      原因：旧版本给 WPS 传了它不支持的转换参数（WPS 无命令行转 PDF 能力）。
+            本版本已移除，且只探测一次，不会反复弹。
+      若仍出现，说明用的是旧程序，请更新到最新发布包。
+
