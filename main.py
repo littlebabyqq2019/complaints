@@ -798,8 +798,12 @@ class WordGenerator:
             else:
                 # 模板该段落没有固定行距：用文档网格 linePitch 作为固定行距，
                 # 让 LibreOffice 与 Word 的「按网格对齐」结果接近。
+                # 注意：_doc_line_pitch 是类的 staticmethod，这里在另一个
+                # staticmethod 内部，**必须**经类名限定调用；裸写
+                # _doc_line_pitch() 会抛 NameError 并被 except 吞掉，
+                # 于是静默退回单倍行距 —— 那正是「还是两页」的原因。
                 try:
-                    _lp = _doc_line_pitch()
+                    _lp = WordGenerator._doc_line_pitch()
                     if _lp:
                         pf.line_spacing = Pt(_lp / 20.0)
                         pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY

@@ -320,6 +320,85 @@ Linux 上对应的角色是 LibreOffice / WPS，所以：
 - **要么**让 LibreOffice 转成 PDF 再交给 CUPS（默认，兼容性最好）
 - **要么**让 LibreOffice 自己调打印子系统（`--print`，少一道转换）
 
+## 三之九、为什么「还是两页」（真实根因，2026-11-24）
+
+上一轮怀疑是字体，现场反馈「已经装了仿宋_GB2312，问题不在字体」——
+确认属实。真正的根因是**生成文档时把模板的固定行距弄丢了**。
+
+模板里有几个段落带固定行距：
+
+```xml
+<w:spacing w:line="260" w:lineRule="exact"/>   <!-- 13pt -->
+<w:spacing w:line="340" w:lineRule="exact"/>   <!-- 17pt -->
+<w:spacing w:line="560" w:lineRule="exact"/>   <!-- 28pt -->
+```
+
+而旧代码用 `cell.text = ''` 清空单元格 —— 这句不只清文字，
+**连段落属性（pPr/spacing）一起清掉了**。之后新建的段落只能退化成
+`w:line="240" w:lineRule="auto"`（单倍行距，按实际字体行高自动排）。
+
+Word 对 auto 比较宽容，LibreOffice 严格按字体实际行高计算，
+于是同一格在麒麟上排得更高，累积溢出到第 2 页。
+
+**修复**：
+
+1. 不再 `cell.text = ''`，改为保留首个段落元素、只删里面的 run，
+   段落属性原样保留
+2. 删除多余空段落，避免残留空段撑高单元格
+3. 沿用模板固定行距；**单位坑**：python-docx 的 `spacing_line` 返回
+   EMU（1pt = 12700 EMU），不是 twips 也不是磅。直接 `Pt(spacing_line)`
+   会得到 215900pt 这种天文数字，反而把页面彻底撑爆
+4. 模板没写行距的段落，用文档网格 `linePitch`（312 twips）作固定行距
+5. `_doc_line_pitch()` 是 staticmethod，在另一个 staticmethod 里必须
+   经类名调用；裸写会抛 NameError 被 except 吞掉，静默退回单倍行距
+
+修复前后对比（同一份工单）：
+
+```
+模板        auto=0  exact=3
+修复前生成  auto=7  exact=4     ← 行距被改成自动
+修复后生成  auto=0  exact=11    ← 全部固定行距
+```
+
+CI 断言「排版保真」：生成文档里模板有固定行距的单元格，
+行距值与行距规则必须逐项一致，否则流水线直接红。
+
+## 三之十、LibreOffice 自身损坏（FT_Done_MM_Var）
+
+现场报错：
+
+```
+/usr/lib/libreoffice/program/soffice.bin: symbol lookup error:
+/lib/aarch64-linux-gnu/libcairo.so.2: undefined symbol: FT_Done_MM_Var
+```
+
+这是 **LibreOffice 与系统 freetype/cairo 版本不配套** 的系统级问题，
+不是本程序能修的 —— 此时 LibreOffice 连启动都做不到，任何转换都会失败。
+
+程序现在会：
+
+- 首次遇到该错误即记住，不再反复重试（避免每次等超时）
+- 弹窗给出可直接执行的修复命令
+- 主动询问「是否改用 WPS 打开并手动打印」
+
+修复 LibreOffice：
+
+```bash
+sudo apt install --reinstall libreoffice-writer libreoffice-core libfreetype6 libcairo2
+# 源不可用时先卸载再装
+sudo apt remove --purge libreoffice-* && sudo apt install libreoffice-writer
+```
+
+不想动系统的话，用 WPS 打印即可 —— 版式与 Word 一致，而且不需要转换：
+
+```
+「打印」菜单 → 「在 WPS 中打开当前文件并手动打印」
+```
+
+**关于诊断.sh 闪退**：原来脚本开头是 `set -u`，任一未定义变量或
+`file`/`ldd` 命令缺失就会让整个脚本中途退出，什么都看不到。
+现已改为 `set +u` / `set +e`，每项检查独立失败，保证一定打印出结论。
+
 ## 四、目录与数据
 
 ```

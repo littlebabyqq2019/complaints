@@ -3208,6 +3208,18 @@ class ComplaintManagementGUI:
             # 使用系统打印通道（Windows=ShellExecute，UOS/麒麟=LibreOffice + CUPS lp）
             ok, info = print_file(current_file_path)
             if not ok:
+                # LibreOffice 自身损坏时，直接问用户要不要用 WPS 打印，
+                # 而不是只弹一段报错让人自己找路。
+                try:
+                    from platform_compat import lo_broken_reason
+                    if lo_broken_reason():
+                        if messagebox.askyesno(
+                                "LibreOffice 不可用",
+                                info + "\n\n现在就改用 WPS 打开并手动打印吗？"):
+                            self.print_via_wps()
+                            return
+                except Exception:
+                    pass
                 raise RuntimeError(info)
             self.log(f"已发送打印: {filename} ({info})")
             # 页数变化（转 PDF 后一页变两页）单独提示，不打断打印

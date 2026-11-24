@@ -305,6 +305,32 @@ def _pick_produced(work_dir, before, ext):
 
 _LAST_CONVERT_ERROR = ['']
 _LAST_PAGE_WARNING = ['']
+# LibreOffice 本机是否「自身损坏」（缺符号/缺库），一旦确认就不再重试
+_LO_BROKEN = ['']
+
+# LibreOffice 启动即失败的典型特征：动态库符号/版本不匹配。
+# 麒麟现场实测：
+#   /usr/lib/libreoffice/program/soffice.bin: symbol lookup error:
+#   /lib/aarch64-linux-gnu/libcairo.so.2: undefined symbol: FT_Done_MM_Var
+# 这是 freetype 与 cairo 版本不配套的系统级问题，不是本程序能修的，
+# 但必须让用户看到可执行的解决方案，而不是反复失败。
+_LO_BROKEN_SIGNS = (
+    'symbol lookup error',
+    'undefined symbol',
+    'FT_Done_MM_Var',
+    'error while loading shared libraries',
+    'cannot open shared object file',
+)
+
+
+def lo_broken_reason():
+    """LibreOffice 若被判定为自身损坏，返回原因；否则空串。"""
+    return _LO_BROKEN[0]
+
+
+def _looks_like_broken_lo(text):
+    low = (text or '').lower()
+    return any(s.lower() in low for s in _LO_BROKEN_SIGNS)
 
 
 def last_convert_error():
@@ -325,6 +351,15 @@ def _try_soffice(src, work_dir, target_fmt, timeout=180):
     soffice = _find_soffice()
     if not soffice:
         _LAST_CONVERT_ERROR[0] = '未找到 LibreOffice（soffice）'
+        return None
+
+    # 已确认本机 LibreOffice 自身损坏：直接跳过，避免每次都等一次超时
+    if _LO_BROKEN[0]:
+        _LAST_CONVERT_ERROR[0] = (
+            '本机 LibreOffice 自身损坏（缺少动态库符号），无法转换：\n'
+            + _LO_BROKEN[0].splitlines()[0]
+            + '\n修复：sudo apt install --reinstall libreoffice-writer '
+              'libreoffice-core libfreetype6 libcairo2')
         return None
 
     ext = os.path.splitext(src)[1].lower().lstrip('.') or 'docx'
@@ -370,7 +405,15 @@ def _try_soffice(src, work_dir, target_fmt, timeout=180):
 
         # 没有产物：把真实原因带回去，别再静默
         detail = err or out or f'返回码 {r.returncode}'
-        _LAST_CONVERT_ERROR[0] = 'LibreOffice 转换未产生文件：' + detail[:300]
+        if _looks_like_broken_lo(err) or _looks_like_broken_lo(out):
+            _LO_BROKEN[0] = (err or out).strip()[:400]
+            _LAST_CONVERT_ERROR[0] = (
+                '本机 LibreOffice 自身损坏（缺少动态库符号），无法转换：\n'
+                + _LO_BROKEN[0].splitlines()[0]
+                + '\n修复：sudo apt install --reinstall libreoffice-writer '
+                  'libreoffice-core libfreetype6 libcairo2')
+        else:
+            _LAST_CONVERT_ERROR[0] = 'LibreOffice 转换未产生文件：' + detail[:300]
         return None
     finally:
         shutil.rmtree(stage, ignore_errors=True)
@@ -557,6 +600,11 @@ def print_file_direct_word(path, printer=None):
     if not soffice:
         return False, "未找到 LibreOffice，无法直接打印 Word"
 
+    # LibreOffice 自身损坏（如 FT_Done_MM_Var 缺符号）时它连启动都做不到
+    if _LO_BROKEN[0]:
+        return False, ('本机 LibreOffice 自身损坏，无法直接打印：\n'
+                       + _LO_BROKEN[0].splitlines()[0])
+
     tmp = tempfile.mkdtemp(prefix='loprint_')
     try:
         # 同样先复制成安全名，规避 # & 空格 中文 的 URI 问题
@@ -642,6 +690,22 @@ def print_file(path):
                 # 把 LibreOffice 的真实失败原因带出来，避免「装了 LO 却不知道为啥失败」。
                 reason = last_convert_error() or "未得到具体原因"
                 soffice = _find_soffice()
+                broken = lo_broken_reason()
+                if broken:
+                    # LibreOffice 自身坏了：给出可直接执行的修复命令，
+                    # 并明确告知「现在唯一能保证版式的是 WPS」。
+                    return (False,
+                            "打印已中止：本机 LibreOffice 自身损坏，无法转换。\n\n"
+                            f"报错：{broken.splitlines()[0]}\n\n"
+                            "修复 LibreOffice（选一个，需管理员）：\n"
+                            "  sudo apt install --reinstall libreoffice-writer "
+                            "libreoffice-core libfreetype6 libcairo2\n"
+                            "  # 若源不可用，直接卸载后重装：\n"
+                            "  sudo apt remove --purge libreoffice-* && "
+                            "sudo apt install libreoffice-writer\n\n"
+                            "不改系统也能打印（版式与 Word 一致）：\n"
+                            "  · 本程序「打印」菜单 → 「在 WPS 中打开当前文件并手动打印」\n"
+                            "  · 或直接双击用 WPS 打开，点 WPS 的打印按钮")
                 hint = ("检测到 LibreOffice: " + soffice) if soffice else \
                        ("未检测到 LibreOffice，请安装：\n"
                         "  sudo apt install -y libreoffice-writer")

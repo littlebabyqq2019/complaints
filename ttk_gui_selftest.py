@@ -197,6 +197,35 @@ def main():
     except Exception as e:
         _fail("打印链路保护", e)
 
+    # 1d-2) LibreOffice 自身损坏（FT_Done_MM_Var 缺符号）必须被识别并给出出路
+    try:
+        import platform_compat as _pcb
+        _sim = ('/usr/lib/libreoffice/program/soffice.bin: symbol lookup error: '
+                '/lib/aarch64-linux-gnu/libcairo.so.2: undefined symbol: FT_Done_MM_Var')
+        if not _pcb._looks_like_broken_lo(_sim):
+            raise AssertionError('未识别 FT_Done_MM_Var 缺符号')
+        if _pcb._looks_like_broken_lo('convert /tmp/a.docx -> a.pdf'):
+            raise AssertionError('正常输出被误判为损坏')
+
+        _saved2 = (_pcb.IS_WINDOWS, _pcb._find_soffice, _pcb.shutil.which)
+        _pcb.IS_WINDOWS = False
+        _pcb._find_soffice = lambda: '/usr/bin/soffice'
+        _pcb.shutil.which = lambda n: ('/usr/bin/lp' if n == 'lp' else None)
+        _pcb._LO_BROKEN[0] = _sim.splitlines()[0]
+        try:
+            _okb, _infob = _pcb.print_file('/nonexistent.docx')
+        finally:
+            _pcb._LO_BROKEN[0] = ''
+            _pcb.IS_WINDOWS, _pcb._find_soffice, _pcb.shutil.which = _saved2
+        if _okb:
+            raise AssertionError('LibreOffice 损坏却返回打印成功')
+        for _need in ('FT_Done_MM_Var', 'reinstall', 'WPS'):
+            if _need not in _infob:
+                raise AssertionError('损坏提示缺少关键信息: %s' % _need)
+        out("  OK   LibreOffice 损坏可识别（含报错/修复命令/WPS 出路）")
+    except Exception as e:
+        _fail("LibreOffice 损坏识别", e)
+
     # 1e) 「装了 LibreOffice 却仍转换失败」的关键防线：
     #     带 # & 空格 中文 的文件名必须被复制成安全名再转换
     #     （# 是 URI 片段分隔符，会让 LO 产物名字对不上而静默失败）
