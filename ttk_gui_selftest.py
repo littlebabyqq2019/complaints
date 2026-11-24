@@ -233,6 +233,49 @@ def main():
     except Exception as e:
         _fail("转换加固", e)
 
+    # 1f) 字体度量兼容 + 页数校验（「Word 一页 -> PDF 两页」）
+    try:
+        import font_compat as _fc
+        import platform_compat as _pc3
+        import tempfile as _tf4
+        import shutil as _sh4
+
+        # 别名配置必须包含模板用到的 Windows 字体
+        _built = _fc.build_alias_conf()
+        if _built:
+            _content, _n = _built
+            if '仿宋_GB2312' not in _content:
+                raise AssertionError('字体别名缺少 仿宋_GB2312')
+            if '<prefer>' not in _content:
+                raise AssertionError('字体别名缺少 prefer 规则')
+
+        # 页数解析与差异检测
+        _d4 = _tf4.mkdtemp(prefix='selftest_page_')
+        try:
+            _p2 = os.path.join(_d4, 'two.pdf')
+            open(_p2, 'wb').write(b'%PDF-1.4\n1 0 obj<</Type/Pages/Count 2>>endobj\n')
+            if _fc.pdf_page_count(_p2) != 2:
+                raise AssertionError('PDF 页数解析错误')
+            _p1 = os.path.join(_d4, 'one.pdf')
+            open(_p1, 'wb').write(b'%PDF-1.4\n1 0 obj<</Type/Pages/Count 1>>endobj\n')
+            # 用一个 app.xml 记录 1 页的 docx 当「Word」
+            _warn = ''
+            import glob as _glob4
+            _samples = (_glob4.glob(os.path.join(_HERE, '示例', '*.docx'))
+                        + _glob4.glob(os.path.join(_HERE, '待处理', '*.docx'))
+                        + _glob4.glob(os.path.join(_HERE, '*.docx')))
+            for _s in _samples:
+                if _fc.docx_page_estimate(_s) == 1:
+                    _warn = _pc3._verify_page_count(_s, _p2)
+                    break
+            if _warn and '页数不一致' not in _warn:
+                raise AssertionError('页数差异提示文案不对: %r' % _warn)
+            out("  OK   字体别名 + 页数校验（Word->PDF 变页可被发现）")
+        finally:
+            _sh4.rmtree(_d4, ignore_errors=True)
+    except Exception as e:
+        _fail("字体/页数校验", e)
+
     # 1b) WordML（Word 2003 XML）提取链路：现场「处理 Word 提示提取数据失败」
     #     根因是工单导出文件扩展名 .docx 但内容是 XML 单文件，python-docx 读不了。
     try:

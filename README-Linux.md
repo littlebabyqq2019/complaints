@@ -253,6 +253,73 @@ LibreOffice 内部按 `file://` URI 处理路径，**`#` 是 URI 片段分隔符
 `诊断.sh` 也加了一步真实转换自检：拿一份 `.docx` 实际转一次 PDF，
 直接告诉你「通过 / 失败 + 原因」，不用猜。
 
+## 三之八、Word 转 PDF「一页变两页」与「能否直接打印 Word」
+
+### 为什么会变两页
+
+模板用的是 Windows 字体：`仿宋_GB2312`、`方正小标宋简体`。
+麒麟/统信上没有这些字体，LibreOffice 会做字体替换：
+
+```
+仿宋_GB2312  ->  Noto Serif CJK SC（或其他）
+```
+
+替换字体的**度量不同**（字面高度、行距、字符宽度），而模板页边距很紧
+（A4、上下 1440 twips、左右 1800 twips）。行高微增，最后一行就被挤到第 2 页。
+
+**这不是转换错误，是字体替换的必然结果。**
+
+### 已做的缓解（自动生效）
+
+`font_compat.py` 给 fontconfig 写用户级别名（`~/.config/fontconfig/conf.d/`），
+优先使用度量最接近的本地字体：
+
+| 模板字体 | 映射到 |
+| --- | --- |
+| 仿宋_GB2312 / 仿宋 | FangSong → AR PL UMing CN → Noto Serif CJK SC |
+| 宋体 / SimSun | AR PL UMing CN → Noto Serif CJK SC |
+| 方正小标宋简体 | Noto Serif CJK SC |
+| 黑体 / 微软雅黑 | Noto Sans CJK SC |
+
+同时加了**页数校验**：转换后比对 Word 记录的页数与 PDF 实际页数，
+不一致就弹提醒并说明缺哪些字体 —— 不再让你打完才发现多一张纸。
+
+### 要完全一致，有两条路
+
+1. **装上模板字体**（最彻底）
+   把 `仿宋_GB2312.ttf`、`方正小标宋简体.ttf` 拷到 `~/.local/share/fonts/`
+   再 `fc-cache -fv`。这两个是商业字体，需自行取得授权。
+
+2. **不转 PDF，直接打印 Word**
+   菜单「打印 → ⚙ Word 直接打印（不转 PDF）」，走 LibreOffice 的 `--print`，
+   不落 PDF 文件。或「打印 → 📄 在 WPS 中打开当前文件并手动打印」，
+   用 WPS 自己的排版引擎，与 Word 最接近。
+
+也可以用环境变量切换默认行为：
+
+```bash
+COMPLAINTS_PRINT_MODE=pdf      ./启动GUI.sh   # 默认：转 PDF 再打（兼容性最好）
+COMPLAINTS_PRINT_MODE=direct   ./启动GUI.sh   # 直接打印 Word
+COMPLAINTS_PRINT_MODE=word     ./启动GUI.sh   # 交给 WPS 打开后手打
+```
+
+### 为什么不能把 docx 直接交给 lp
+
+CUPS 的 `lp` 只接受 PDF / PostScript / 图片等打印就绪格式，
+**不认识 OOXML**。直接递 `.docx` 会报：
+
+```
+/bin/lp：不支持的 document-format
+"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+```
+
+Windows 之所以能「直接打印 Word」，是 `ShellExecute(..., "print")` 让
+Word 自己去排版并输出到打印驱动 —— 真正干活的仍是 Word，不是打印子系统。
+Linux 上对应的角色是 LibreOffice / WPS，所以：
+
+- **要么**让 LibreOffice 转成 PDF 再交给 CUPS（默认，兼容性最好）
+- **要么**让 LibreOffice 自己调打印子系统（`--print`，少一道转换）
+
 ## 四、目录与数据
 
 ```
@@ -266,6 +333,7 @@ LibreOffice 内部按 `file://` URI 处理路径，**`#` 是 URI 片段分隔符
 ├── wps_compat.py            # WPS 调用层（老 .doc 转换，统信/麒麟预装）
 ├── ui_layout.py             # 小屏/高DPI 布局适配：窗口自适应、滚轮、贴底按钮条
 ├── emoji_compat.py          # 按钮 emoji 兼容：麒麟无 emoji 字体时剥掉图标避免方框
+├── font_compat.py           # 字体度量兼容：Windows 字体映射 + 页数校验（防一页变两页）
 ├── ttk_gui_selftest.py      # 无头 GUI 冒烟测试（--selftest 入口）
 ├── 诊断.sh                  # 现场诊断：Tk / ttkbootstrap 版本 / 控件自检 / 启动日志
 ├── 投诉批办单示例#1.docx     # Word 模板

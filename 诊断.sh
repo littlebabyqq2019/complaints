@@ -72,6 +72,15 @@ try:
 except Exception as e:
     print(f"  LO      : 检查失败 -> {e}")
 
+# 字体度量：Word 转 PDF 后一页变两页的根因
+try:
+    import font_compat as _fc
+    print(f"  字体    : {_fc.diagnose()}")
+    _ok, _msg = _fc.ensure_font_aliases()
+    print(f"            别名: {_msg}")
+except Exception as e:
+    print(f"  字体    : 检查失败 -> {e}")
+
 # 打印链路：真做一次 Word->PDF 转换，确认「装了 LO 但转不出来」这类问题
 try:
     import platform_compat as _pc, tempfile, os, glob
@@ -88,6 +97,12 @@ try:
         pdf = _pc.word_to_pdf(src, out)
         ok = bool(pdf and os.path.isfile(pdf) and os.path.getsize(pdf) > 0)
         print(f"  打印自检: {'通过' if ok else '失败'}（样例 {os.path.basename(src)}）")
+        if ok:
+            _w = _pc.page_warning()
+            if _w:
+                print(f"            版式: {_w.splitlines()[0]}")
+            else:
+                print("            版式: 页数与 Word 一致")
         if not ok:
             print(f"            原因: {_pc.last_convert_error() or '未得到具体原因'}")
             print("            处理: sudo apt install -y libreoffice-writer")

@@ -304,11 +304,17 @@ def _pick_produced(work_dir, before, ext):
 
 
 _LAST_CONVERT_ERROR = ['']
+_LAST_PAGE_WARNING = ['']
 
 
 def last_convert_error():
     """最近一次转换失败的原因（给 GUI 提示用）。"""
     return _LAST_CONVERT_ERROR[0]
+
+
+def page_warning():
+    """最近一次转换的页数提示（可能为空）；用于提醒「一页变两页」。"""
+    return _LAST_PAGE_WARNING[0]
 
 
 def _try_soffice(src, work_dir, target_fmt, timeout=180):
@@ -336,6 +342,16 @@ def _try_soffice(src, work_dir, target_fmt, timeout=180):
             conv = target_fmt
 
         profile = 'file://' + os.path.join(stage, 'lo_profile')
+
+        # 字体度量兼容：模板用「仿宋_GB2312」等 Windows 字体，麒麟上没有，
+        # LibreOffice 会替换成度量不同的字体，导致行高变化、一页变两页。
+        # 转换前确保用户级 fontconfig 别名已就位（映射到度量最接近的本地字体）。
+        try:
+            import font_compat
+            font_compat.ensure_font_aliases()
+        except Exception:
+            pass
+
         cmd = [soffice, '-env:UserInstallation=' + profile,
                '--headless', '--norestore', '--invisible', '--nodefault',
                '--nolockcheck', '--nofirststartwizard',
@@ -360,12 +376,36 @@ def _try_soffice(src, work_dir, target_fmt, timeout=180):
         shutil.rmtree(stage, ignore_errors=True)
 
 
+def _verify_page_count(word_path, pdf_path):
+    """
+    比对 Word 与 PDF 的页数，返回提示文本（可能为空）。
+
+    现场反馈「Word 一页，转 PDF 变两页」：模板页边距很紧，字体替换后
+    行高微增就把最后一行挤到第二页。这里做一次校验，把差异摆到台面上，
+    而不是让用户打完才发现多一张纸。
+    """
+    try:
+        import font_compat
+        expect = font_compat.docx_page_estimate(word_path)
+        actual = font_compat.pdf_page_count(pdf_path)
+        if expect and actual and actual != expect:
+            miss = font_compat.docx_missing_fonts(word_path)
+            tip = ('缺少字体：' + '、'.join(miss)) if miss else '字体已替换'
+            return ('页数不一致：Word %d 页 -> PDF %d 页（%s）。\n'
+                    '如需完全一致，请安装模板字体（仿宋_GB2312 等），'
+                    '或用 WPS 直接打开打印。' % (expect, actual, tip))
+    except Exception:
+        pass
+    return ''
+
+
 def word_to_pdf(word_path, out_pdf_path=None):
     """
     Word -> PDF。
       Windows: docx2pdf（原逻辑）
       Linux  : LibreOffice 优先（唯一可靠），WPS 兜底，unoconv 最后
     成功返回 PDF 路径，失败返回 None；失败原因见 last_convert_error()。
+    页数变化会写入 _LAST_PAGE_WARNING（见 page_warning()）。
     """
     word_path = os.path.abspath(word_path)
     base = os.path.splitext(os.path.basename(word_path))[0]
@@ -374,6 +414,7 @@ def word_to_pdf(word_path, out_pdf_path=None):
     out_pdf_path = os.path.abspath(out_pdf_path)
     os.makedirs(os.path.dirname(out_pdf_path), exist_ok=True)
     _LAST_CONVERT_ERROR[0] = ''
+    _LAST_PAGE_WARNING[0] = ''
 
     if IS_WINDOWS:
         try:
@@ -395,6 +436,7 @@ def word_to_pdf(word_path, out_pdf_path=None):
                 pass
         try:
             shutil.move(pdf, out_pdf_path)
+            _LAST_PAGE_WARNING[0] = _verify_page_count(word_path, out_pdf_path)
             return out_pdf_path
         except OSError:
             pass
@@ -413,6 +455,7 @@ def word_to_pdf(word_path, out_pdf_path=None):
                         except OSError:
                             pass
                     shutil.move(wps_out, out_pdf_path)
+                    _LAST_PAGE_WARNING[0] = _verify_page_count(word_path, out_pdf_path)
                     return out_pdf_path
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -435,6 +478,7 @@ def word_to_pdf(word_path, out_pdf_path=None):
                     except OSError:
                         pass
                 shutil.move(produced, out_pdf_path)
+                _LAST_PAGE_WARNING[0] = _verify_page_count(word_path, out_pdf_path)
                 return out_pdf_path
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -493,18 +537,66 @@ def doc_to_docx(doc_path, out_dir):
     return None
 
 
+def print_file_direct_word(path, printer=None):
+    """
+    直接打印 Word（不生成 PDF），供「不想因转换而变版式」的场景使用。
+
+    为什么能直接打：CUPS 的 lp 只认 PDF/PS/图片，但 LibreOffice 自带
+    `--print` 参数，会自己调用系统打印子系统把 docx 送进队列，中间不落
+    PDF 文件 —— 排版由 LibreOffice 直接输出到打印机驱动，不会因为
+    「转 PDF 再打」多一道字体替换。
+
+    注意：LibreOffice 打印时仍然用本机的字体替换，所以「字体缺失导致
+    行高变化」的问题依然存在；它解决的是「多一道 PDF 转换」这层风险，
+    而不是字体本身。要彻底一致仍需安装模板字体。
+
+    返回 (是否成功, 说明文字)。
+    """
+    path = os.path.abspath(path)
+    soffice = _find_soffice()
+    if not soffice:
+        return False, "未找到 LibreOffice，无法直接打印 Word"
+
+    tmp = tempfile.mkdtemp(prefix='loprint_')
+    try:
+        # 同样先复制成安全名，规避 # & 空格 中文 的 URI 问题
+        ext = os.path.splitext(path)[1].lower() or '.docx'
+        safe = _safe_copy_for_conversion(path, tmp, ext)
+        profile = 'file://' + os.path.join(tmp, 'lo_profile')
+        cmd = [soffice, '-env:UserInstallation=' + profile,
+               '--headless', '--norestore', '--invisible', '--nodefault',
+               '--nolockcheck', '--nofirststartwizard']
+        if printer:
+            cmd += ['--print-to-printer', printer]
+        cmd += ['--print', safe]
+        r = _run_office(cmd, timeout=180)
+        if r is None:
+            return False, "LibreOffice 直接打印超时或被中断"
+        err = (r.stderr or b'').decode('utf-8', 'ignore').strip()
+        if r.returncode != 0:
+            return False, err or ('LibreOffice 打印返回码 %d' % r.returncode)
+        return True, "已通过 LibreOffice 直接发送到打印队列"
+    except Exception as e:
+        return False, "直接打印失败：%s" % e
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def print_file(path):
     """
-    打印单个文档，等价 Windows 的 win32api.ShellExecute(0,"print",...)。
+    打印单个文档。
 
-    Linux 下必须先转成 PDF 再交给 CUPS 的 lp：CUPS 不认识 docx 的
-    MIME 类型，直接递 .docx 会报
-        /bin/lp: 不支持的 document-format
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    这正是麒麟现场的报错。所以转换失败时**直接返回失败**，
-    绝不把原 Word 文件塞给 lp。
+    Windows: ShellExecute('print') —— 与旧版一致。
+    Linux  : 两种通路，可用 COMPLAINTS_PRINT_MODE 选择：
+        pdf（默认）  先转 PDF 再 lp。兼容性最好（任何打印机驱动都认 PDF），
+                     但会因字体替换出现「一页变两页」。
+        direct       用 LibreOffice 的 --print 直接送打印队列，不落 PDF，
+                     少一道转换；排版仍受本机字体影响。
+        word         把 .docx 交给 WPS 的图形界面打开（人工确认后打印）。
 
-    PDF 直接 lp。
+    PDF 与 direct 都失败时不再「静默把 docx 喂给 lp」
+    （CUPS 会报「不支持的 document-format」）。
+
     返回 (是否成功, 说明文字)。
     """
     path = os.path.abspath(path)
@@ -516,10 +608,32 @@ def print_file(path):
         except Exception as e:
             return False, str(e)
 
+    mode = (os.environ.get('COMPLAINTS_PRINT_MODE') or 'pdf').strip().lower()
+    is_word = path.lower().endswith((".doc", ".docx", ".wps", ".rtf", ".odt"))
+
+    # --- direct 模式：直接打印 Word，不生成 PDF ---
+    if is_word and mode in ('direct', 'word'):
+        if mode == 'word':
+            # 交给 WPS 图形界面，由人确认后打印（最保真，但需人工点一下）
+            try:
+                import wps_compat
+                exe = wps_compat.find_wps()
+                if exe:
+                    subprocess.Popen([exe, path],
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+                    return True, "已在 WPS 中打开，请用 WPS 的打印按钮打印"
+            except Exception:
+                pass
+        ok, info = print_file_direct_word(path)
+        if ok:
+            return True, info
+        # 直接打印失败，继续走 PDF 通路（不直接放弃）
+
     tmp_dir = None
     target = path
     try:
-        if path.lower().endswith((".doc", ".docx", ".wps", ".rtf", ".odt")):
+        if is_word:
             tmp_dir = tempfile.mkdtemp(prefix="printconv_")
             base = os.path.splitext(os.path.basename(path))[0]
             pdf = word_to_pdf(path, os.path.join(tmp_dir, base + ".pdf"))
@@ -535,8 +649,14 @@ def print_file(path):
                         "无法把 Word 转成 PDF，打印已中止。\n\n"
                         f"原因：{reason}\n"
                         f"{hint}\n\n"
-                        "可先试：先用「批量转PDF」手动转换，成功后再打印。")
+                        "可选办法：\n"
+                        "  · 用 WPS 打开该文件后手动打印（版式最保真）\n"
+                        "  · COMPLAINTS_PRINT_MODE=direct ./启动GUI.sh 直接打印\n"
+                        "  · 先用「批量转PDF」转换后打印 PDF")
             target = pdf
+
+        # 页数变化提醒（转 PDF 后一页变两页）
+        warn = page_warning()
 
         lp = shutil.which("lp")
         if not lp:
@@ -548,7 +668,10 @@ def print_file(path):
         err = (r.stderr or b"").decode("utf-8", "ignore").strip()
         if r.returncode != 0:
             return False, err or out or "lp 返回非零状态"
-        return True, out or "已发送到打印队列"
+        msg = out or "已发送到打印队列"
+        if warn:
+            msg += "\n\n注意：" + warn
+        return True, msg
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)

@@ -826,6 +826,14 @@ class ComplaintManagementGUI:
         print_menu.add_command(label="批量打印选中（静默）", command=self.silent_batch_print)
         print_menu.add_separator()
         print_menu.add_command(label="批量打印全部", command=self.batch_print_all)
+        if not IS_WINDOWS:
+            # 麒麟/统信：Word 转 PDF 会因字体替换导致「一页变两页」。
+            # 这里提供两条不改版式的打印方式，随用随切。
+            print_menu.add_separator()
+            print_menu.add_command(label="⚙ Word 直接打印（不转 PDF）",
+                                   command=self.print_word_direct)
+            print_menu.add_command(label="📄 在 WPS 中打开当前文件并手动打印",
+                                   command=self.print_via_wps)
         
         # 工具菜单
         tools_menu = tk.Menu(menubar, tearoff=0)
@@ -3124,6 +3132,59 @@ class ComplaintManagementGUI:
             import traceback
             self.log(traceback.format_exc())
     
+    def print_word_direct(self):
+        """
+        直接打印当前 Word（不生成 PDF）。
+
+        为什么需要它：麒麟上 Word 转 PDF 会因缺少「仿宋_GB2312」等字体，
+        替换后行高变化，一页内容溢出成两页。这条通路让 LibreOffice
+        直接把文档送进打印队列，少一道 PDF 转换。
+        """
+        if not self.current_file:
+            messagebox.showwarning("提示", "请先选择要打印的文件")
+            return
+        path = self.current_file
+        if not path.lower().endswith((".doc", ".docx", ".wps", ".rtf", ".odt")):
+            messagebox.showinfo("提示", "「直接打印」只适用于 Word 文档；\nPDF 请用「打印当前文件」。")
+            return
+        try:
+            from platform_compat import print_file_direct_word
+            self.log(f"开始直接打印（不转PDF）: {os.path.basename(path)}")
+            ok, info = print_file_direct_word(path)
+            if ok:
+                self.log(f"✓ {info}")
+                messagebox.showinfo("已发送", info)
+            else:
+                self.log(f"✗ 直接打印失败: {info}")
+                messagebox.showerror("直接打印失败",
+                                     info + "\n\n可改用「在 WPS 中打开并手动打印」。")
+        except Exception as e:
+            self.log(f"✗ 直接打印异常: {e}")
+            messagebox.showerror("直接打印失败", str(e))
+
+    def print_via_wps(self):
+        """在 WPS 中打开当前文件，由用户手动点打印（版式最保真）。"""
+        if not self.current_file:
+            messagebox.showwarning("提示", "请先选择要打印的文件")
+            return
+        try:
+            import subprocess
+            import wps_compat
+            exe = wps_compat.find_wps()
+            if not exe:
+                messagebox.showerror("未找到 WPS",
+                                     "系统未检测到 WPS。\n可用系统默认程序打开：\n"
+                                     "  xdg-open 文件名")
+                return
+            subprocess.Popen([exe, self.current_file],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.log(f"已在 WPS 中打开: {os.path.basename(self.current_file)}")
+            messagebox.showinfo("已打开",
+                                "已在 WPS 中打开该文件。\n请用 WPS 的「打印」按钮打印，"
+                                "这样版式与 Word 完全一致。")
+        except Exception as e:
+            messagebox.showerror("打开失败", str(e))
+
     def print_current(self):
         """打印当前文件"""
         if not self.current_file:
@@ -3149,6 +3210,15 @@ class ComplaintManagementGUI:
             if not ok:
                 raise RuntimeError(info)
             self.log(f"已发送打印: {filename} ({info})")
+            # 页数变化（转 PDF 后一页变两页）单独提示，不打断打印
+            try:
+                from platform_compat import page_warning
+                _pw = page_warning()
+                if _pw:
+                    self.log("⚠ " + _pw.replace("\n", " "))
+                    messagebox.showwarning("打印版式提醒", _pw)
+            except Exception:
+                pass
             
             # 立即复制到已打印目录（覆盖同名文件）
             printed_dir = self.path_config['已打印']
@@ -6946,6 +7016,15 @@ def main():
         except Exception as _wps_err:
             logging.warning(f"WPS 检测失败（不影响 WordML/OOXML 处理）: {_wps_err}")
         logging.info(f"✓ {emoji_status()}")
+        # 字体度量兼容：模板用 Windows 字体，麒麟上缺失会导致转 PDF 后
+        # 「一页变两页」。这里建立 fontconfig 别名（映射到度量接近的本地字体）。
+        try:
+            import font_compat
+            _ok_f, _msg_f = font_compat.ensure_font_aliases()
+            logging.info(f"✓ {_msg_f}")
+            logging.info(f"✓ {font_compat.diagnose()}")
+        except Exception as _fe:
+            logging.warning(f"字体兼容处理失败（不影响使用）: {_fe}")
 
         try:
             import ttkbootstrap
