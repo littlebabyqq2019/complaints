@@ -197,6 +197,42 @@ def main():
     except Exception as e:
         _fail("打印链路保护", e)
 
+    # 1e) 「装了 LibreOffice 却仍转换失败」的关键防线：
+    #     带 # & 空格 中文 的文件名必须被复制成安全名再转换
+    #     （# 是 URI 片段分隔符，会让 LO 产物名字对不上而静默失败）
+    try:
+        import platform_compat as _pc2
+        import tempfile as _tf3
+        import shutil as _sh3
+        _d = _tf3.mkdtemp(prefix='selftest_safe_')
+        try:
+            _src = os.path.join(_d, '投诉批办单#C-26-113 & 测试 v2.docx')
+            with open(_src, 'wb') as _f:
+                _f.write(b'PK\x03\x04fake')
+            _stage = os.path.join(_d, 'stage')
+            os.makedirs(_stage, exist_ok=True)
+            _safe = _pc2._safe_copy_for_conversion(_src, _stage, '.docx')
+            _name = os.path.basename(_safe)
+            if _name != 'src_convert.docx':
+                raise AssertionError('安全名副本应为 src_convert.docx，实际 %r' % _name)
+            if os.path.getsize(_safe) != os.path.getsize(_src):
+                raise AssertionError('安全名副本内容不完整')
+
+            # 产物扫描必须只认本次新增，不能把旧文件当结果
+            _before = {os.path.abspath(os.path.join(_d, 'old.pdf'))}
+            open(os.path.join(_d, 'old.pdf'), 'wb').write(b'%PDF-old')
+            if _pc2._pick_produced(_d, _before, 'pdf') is not None:
+                raise AssertionError('产物扫描把旧文件当成了本次结果')
+            open(os.path.join(_d, 'new.pdf'), 'wb').write(b'%PDF-new-content')
+            _got = _pc2._pick_produced(_d, _before, 'pdf')
+            if not _got or os.path.basename(_got) != 'new.pdf':
+                raise AssertionError('产物扫描未选中本次新文件')
+            out("  OK   转换加固：安全文件名 / 产物扫描（规避 # & 空格 中文）")
+        finally:
+            _sh3.rmtree(_d, ignore_errors=True)
+    except Exception as e:
+        _fail("转换加固", e)
+
     # 1b) WordML（Word 2003 XML）提取链路：现场「处理 Word 提示提取数据失败」
     #     根因是工单导出文件扩展名 .docx 但内容是 XML 单文件，python-docx 读不了。
     try:

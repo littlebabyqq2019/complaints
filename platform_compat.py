@@ -269,17 +269,111 @@ def _run_office(cmd, timeout=120):
         return None
 
 
+def _safe_copy_for_conversion(src, work_dir, ext=None):
+    """
+    把源文件复制到 work_dir 并改成纯 ASCII 安全名，返回新路径。
+
+    为什么必须这么做：麒麟生成的批办单文件名是「投诉批办单#C-26-113.docx」。
+    LibreOffice 内部按 file:// URI 处理路径，`#` 是 URI 片段分隔符，
+    `&` 是参数分隔符，空格和中文在部分版本/语言环境下也会出问题，
+    结果就是「转换命令返回成功但产物名字对不上」，上层判定为失败。
+    复制成 safe_<n>.docx 后这些坑全部消失。
+    """
+    ext = ext or os.path.splitext(src)[1].lower() or '.docx'
+    safe = os.path.join(work_dir, 'src_convert' + ext)
+    shutil.copy2(src, safe)
+    return safe
+
+
+def _pick_produced(work_dir, before, ext):
+    """在 work_dir 里找出本次新产生的、扩展名匹配的非空文件。"""
+    found = []
+    try:
+        for name in os.listdir(work_dir):
+            fp = os.path.join(work_dir, name)
+            if not os.path.isfile(fp):
+                continue
+            if os.path.abspath(fp) in before:
+                continue
+            if name.lower().endswith('.' + ext) and os.path.getsize(fp) > 0:
+                found.append(fp)
+    except OSError:
+        pass
+    found.sort(key=lambda x: os.path.getsize(x), reverse=True)
+    return found[0] if found else None
+
+
+_LAST_CONVERT_ERROR = ['']
+
+
+def last_convert_error():
+    """最近一次转换失败的原因（给 GUI 提示用）。"""
+    return _LAST_CONVERT_ERROR[0]
+
+
+def _try_soffice(src, work_dir, target_fmt, timeout=180):
+    """
+    用 LibreOffice 转换一次。返回产物路径或 None，失败原因写入 _LAST_CONVERT_ERROR。
+    会在临时目录里做「安全名副本」，避免 # & 空格 中文 等字符导致的静默失败。
+    """
+    soffice = _find_soffice()
+    if not soffice:
+        _LAST_CONVERT_ERROR[0] = '未找到 LibreOffice（soffice）'
+        return None
+
+    ext = os.path.splitext(src)[1].lower().lstrip('.') or 'docx'
+    stage = tempfile.mkdtemp(prefix='lo_stage_')
+    out_dir = tempfile.mkdtemp(prefix='lo_out_')
+    try:
+        safe_src = _safe_copy_for_conversion(src, stage, '.' + ext)
+        before = set()
+        # 转换串，pdf 与 docx 的 filter 不同
+        if target_fmt == 'pdf':
+            conv = 'pdf:writer_pdf_Export'
+        elif target_fmt == 'docx':
+            conv = 'docx:MS Word 2007 XML'
+        else:
+            conv = target_fmt
+
+        profile = 'file://' + os.path.join(stage, 'lo_profile')
+        cmd = [soffice, '-env:UserInstallation=' + profile,
+               '--headless', '--norestore', '--invisible', '--nodefault',
+               '--nolockcheck', '--nofirststartwizard',
+               '--convert-to', conv, '--outdir', out_dir, safe_src]
+        r = _run_office(cmd, timeout=timeout)
+        if r is None:
+            _LAST_CONVERT_ERROR[0] = 'LibreOffice 调用超时或被中断（首次启动较慢，可重试）'
+            return None
+
+        err = (r.stderr or b'').decode('utf-8', 'ignore').strip()
+        out = (r.stdout or b'').decode('utf-8', 'ignore').strip()
+
+        produced = _pick_produced(out_dir, before, target_fmt)
+        if produced:
+            return produced
+
+        # 没有产物：把真实原因带回去，别再静默
+        detail = err or out or f'返回码 {r.returncode}'
+        _LAST_CONVERT_ERROR[0] = 'LibreOffice 转换未产生文件：' + detail[:300]
+        return None
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
 def word_to_pdf(word_path, out_pdf_path=None):
     """
-    Word -> PDF。Windows 优先走 docx2pdf（原逻辑），Linux 走 LibreOffice/WPS 无头转换。
-    成功返回 PDF 路径，失败返回 None。
+    Word -> PDF。
+      Windows: docx2pdf（原逻辑）
+      Linux  : LibreOffice 优先（唯一可靠），WPS 兜底，unoconv 最后
+    成功返回 PDF 路径，失败返回 None；失败原因见 last_convert_error()。
     """
     word_path = os.path.abspath(word_path)
     base = os.path.splitext(os.path.basename(word_path))[0]
     if out_pdf_path is None:
-        out_pdf_path = os.path.join(os.path.dirname(word_path), base + ".pdf")
+        out_pdf_path = os.path.join(os.path.dirname(word_path), base + '.pdf')
     out_pdf_path = os.path.abspath(out_pdf_path)
     os.makedirs(os.path.dirname(out_pdf_path), exist_ok=True)
+    _LAST_CONVERT_ERROR[0] = ''
 
     if IS_WINDOWS:
         try:
@@ -287,106 +381,107 @@ def word_to_pdf(word_path, out_pdf_path=None):
             convert(word_path, out_pdf_path)
             if os.path.isfile(out_pdf_path) and os.path.getsize(out_pdf_path) > 0:
                 return out_pdf_path
-        except Exception:
+            _LAST_CONVERT_ERROR[0] = 'docx2pdf 未生成 PDF（请确认已安装 Word）'
+        except Exception as e:
+            _LAST_CONVERT_ERROR[0] = 'docx2pdf 失败: %s' % e
+
+    # 1) LibreOffice（安全名副本 + 产物扫描）
+    pdf = _try_soffice(word_path, None, 'pdf')
+    if pdf:
+        if os.path.exists(out_pdf_path):
+            try:
+                os.remove(out_pdf_path)
+            except OSError:
+                pass
+        try:
+            shutil.move(pdf, out_pdf_path)
+            return out_pdf_path
+        except OSError:
             pass
 
-    tmp_dir = tempfile.mkdtemp(prefix="pdfconv_")
-    try:
-        # 顺序很关键：LibreOffice 的 --convert-to 是官方支持的可靠接口；
-        # WPS Linux 没有无头转换能力（传 --convert-to pdf 会被它当成文件名，
-        # 弹「无法打开 pdf"」）。所以 LO 优先，WPS 只在探测为真时才试。
-        soffice = _find_soffice()
-        candidates = []
-        if soffice:
-            profile = "file://" + os.path.join(tmp_dir, "lo_profile")
-            candidates.append([
-                soffice, "-env:UserInstallation=" + profile,
-                "--headless", "--norestore", "--invisible", "--nodefault", "--nolockcheck",
-                "--convert-to", "pdf:writer_pdf_Export", "--outdir", tmp_dir, word_path,
-            ])
-
-        for cmd in candidates:
-            _run_office(cmd)
-            produced = os.path.join(tmp_dir, base + ".pdf")
-            if os.path.isfile(produced) and os.path.getsize(produced) > 0:
-                if os.path.abspath(produced) != out_pdf_path:
-                    if os.path.exists(out_pdf_path):
-                        os.remove(out_pdf_path)
-                    shutil.move(produced, out_pdf_path)
-                return out_pdf_path
-
-        # LibreOffice 没装或转换失败：再问 wps_compat（内部有试转探测，
-        # 不支持的版本会直接返回 None，不会反复弹窗）
-        if _find_wps():
+    # 2) WPS 兜底（内部有试转探测，不支持时立即返回 None，不弹窗）
+    if _find_wps():
+        try:
+            import wps_compat
+            tmp_dir = tempfile.mkdtemp(prefix='wpspdf_')
             try:
-                import wps_compat
                 wps_out = wps_compat.word_to_pdf_with_wps(word_path, out_dir=tmp_dir)
                 if wps_out and os.path.isfile(wps_out) and os.path.getsize(wps_out) > 0:
-                    if os.path.abspath(wps_out) != out_pdf_path:
-                        if os.path.exists(out_pdf_path):
-                            os.remove(out_pdf_path)
-                        shutil.move(wps_out, out_pdf_path)
-                    return out_pdf_path
-            except Exception:
-                pass
-
-        uno = shutil.which("unoconv")
-        if uno:
-            _run_office([uno, "-f", "pdf", "-o",
-                         os.path.join(tmp_dir, base + ".pdf"), word_path])
-            produced = os.path.join(tmp_dir, base + ".pdf")
-            if os.path.isfile(produced) and os.path.getsize(produced) > 0:
-                if os.path.abspath(produced) != out_pdf_path:
                     if os.path.exists(out_pdf_path):
+                        try:
+                            os.remove(out_pdf_path)
+                        except OSError:
+                            pass
+                    shutil.move(wps_out, out_pdf_path)
+                    return out_pdf_path
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception as e:
+            _LAST_CONVERT_ERROR[0] = (_LAST_CONVERT_ERROR[0] + ' / WPS: ' + str(e)).strip(' /')
+
+    # 3) unoconv 最后
+    uno = shutil.which('unoconv')
+    if uno:
+        tmp_dir = tempfile.mkdtemp(prefix='unoconv_')
+        try:
+            _run_office([uno, '-f', 'pdf', '-o',
+                         os.path.join(tmp_dir, base + '.pdf'), word_path],
+                        timeout=180)
+            produced = os.path.join(tmp_dir, base + '.pdf')
+            if os.path.isfile(produced) and os.path.getsize(produced) > 0:
+                if os.path.exists(out_pdf_path):
+                    try:
                         os.remove(out_pdf_path)
-                    shutil.move(produced, out_pdf_path)
+                    except OSError:
+                        pass
+                shutil.move(produced, out_pdf_path)
                 return out_pdf_path
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
     return None
 
 
 def doc_to_docx(doc_path, out_dir):
     """
-    旧版 .doc -> .docx，用于无 Word COM 时提取表格。
-    Windows 用 Word COM，Linux 用 LibreOffice/WPS。成功返回新文件路径，失败返回 None。
+    旧版 .doc -> .docx，用于提取表格。
+    Windows 用 Word COM；Linux 用 LibreOffice 优先、WPS 兜底。
+    成功返回新文件路径，失败返回 None。
     """
     doc_path = os.path.abspath(doc_path)
     base = os.path.splitext(os.path.basename(doc_path))[0]
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, base + ".docx")
+    out_path = os.path.join(out_dir, base + '.docx')
 
     if IS_WINDOWS:
         try:
             import win32com.client
-            word = win32com.client.Dispatch("Word.Application")
+            word = win32com.client.Dispatch('Word.Application')
             word.Visible = False
             word.DisplayAlerts = 0
             try:
                 d = word.Documents.Open(doc_path)
-                d.SaveAs(out_path, FileFormat=16)  # wdFormatXMLDocument = 16
+                d.SaveAs(out_path, FileFormat=16)  # wdFormatXMLDocument
                 d.Close(False)
             finally:
                 word.Quit()
-            if os.path.isfile(out_path):
+            if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
                 return out_path
         except Exception:
             pass
 
-    # 顺序：LibreOffice 优先（官方支持 --convert-to），WPS 作为兜底。
-    # 理由同 word_to_pdf：WPS Linux 无无头转换接口，先试它会弹窗且拖慢批量处理。
-    soffice = _find_soffice()
-    if soffice:
-        profile = "file://" + os.path.join(out_dir, "lo_profile")
-        _run_office([
-            soffice, "-env:UserInstallation=" + profile,
-            "--headless", "--norestore", "--invisible", "--nodefault", "--nolockcheck",
-            "--convert-to", "docx:MS Word 2007 XML", "--outdir", out_dir, doc_path,
-        ])
-        if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+    # LibreOffice 优先（安全名副本 + 产物扫描）
+    produced = _try_soffice(doc_path, None, 'docx')
+    if produced:
+        try:
+            if os.path.exists(out_path):
+                os.remove(out_path)
+            shutil.move(produced, out_path)
             return out_path
+        except OSError:
+            pass
 
-    # LibreOffice 不可用/失败：再试 WPS（内部有试转探测，不支持时直接返回 None）
+    # WPS 兜底
     if os.environ.get('COMPLAINTS_WPS_PREFERENCE', '').strip().lower() != 'off' and _find_wps():
         try:
             import wps_compat
@@ -429,12 +524,18 @@ def print_file(path):
             base = os.path.splitext(os.path.basename(path))[0]
             pdf = word_to_pdf(path, os.path.join(tmp_dir, base + ".pdf"))
             if not pdf or not os.path.isfile(pdf) or os.path.getsize(pdf) <= 0:
-                # 关键：转换失败必须直接报错，不能拿 docx 去喂 lp
+                # 关键：转换失败必须直接报错，不能拿 docx 去喂 lp。
+                # 把 LibreOffice 的真实失败原因带出来，避免「装了 LO 却不知道为啥失败」。
+                reason = last_convert_error() or "未得到具体原因"
+                soffice = _find_soffice()
+                hint = ("检测到 LibreOffice: " + soffice) if soffice else \
+                       ("未检测到 LibreOffice，请安装：\n"
+                        "  sudo apt install -y libreoffice-writer")
                 return (False,
-                        "无法把 Word 转成 PDF，打印已中止。\n"
-                        "请安装 LibreOffice（推荐）或 WPS：\n"
-                        "  sudo apt install -y libreoffice-writer\n"
-                        "或先用「批量转PDF」手动转换后再打印。")
+                        "无法把 Word 转成 PDF，打印已中止。\n\n"
+                        f"原因：{reason}\n"
+                        f"{hint}\n\n"
+                        "可先试：先用「批量转PDF」手动转换，成功后再打印。")
             target = pdf
 
         lp = shutil.which("lp")

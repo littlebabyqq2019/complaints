@@ -71,6 +71,31 @@ try:
     print(f"  LO      : {_pc._find_soffice() or '未检测到 LibreOffice'}")
 except Exception as e:
     print(f"  LO      : 检查失败 -> {e}")
+
+# 打印链路：真做一次 Word->PDF 转换，确认「装了 LO 但转不出来」这类问题
+try:
+    import platform_compat as _pc, tempfile, os, glob
+    cands = []
+    for d in ("待打印", "待处理", "已处理"):
+        cands += glob.glob(os.path.join(d, "*.docx"))
+    cands = [c for c in cands if not os.path.basename(c).startswith("~$")]
+    if not cands:
+        print("  打印自检: 跳过（没有可用的 .docx 样例，放一份到 待处理/ 再跑）")
+    else:
+        src = cands[0]
+        tmpd = tempfile.mkdtemp(prefix="diagpdf_")
+        out = os.path.join(tmpd, "diag.pdf")
+        pdf = _pc.word_to_pdf(src, out)
+        ok = bool(pdf and os.path.isfile(pdf) and os.path.getsize(pdf) > 0)
+        print(f"  打印自检: {'通过' if ok else '失败'}（样例 {os.path.basename(src)}）")
+        if not ok:
+            print(f"            原因: {_pc.last_convert_error() or '未得到具体原因'}")
+            print("            处理: sudo apt install -y libreoffice-writer")
+            print("                  或用「批量转PDF」转好后直接打印 PDF")
+        import shutil as _sh
+        _sh.rmtree(tmpd, ignore_errors=True)
+except Exception as e:
+    print(f"  打印自检: 检查失败 -> {e}")
 PYEOF
 fi
 
