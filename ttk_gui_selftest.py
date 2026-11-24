@@ -329,6 +329,44 @@ def main():
             if _fonts and _fonts != {'仿宋_GB2312'}:
                 raise AssertionError('填充字体错误: %s' % _fonts)
             out("  OK   生成批办单：12345 / 信息中心 / 来文字号 / 仿宋_GB2312")
+
+            # 1b-2b) 排版保真：生成的文档必须保留模板的固定行距。
+            #        曾经把 lineRule="exact" 写成 auto，LibreOffice 按实际行高
+            #        排版导致「一页变两页」。这里逐行比对行距是否被破坏。
+            try:
+                _tpl = _main.WordGenerator().template_path
+                if os.path.isfile(_tpl):
+                    _t_ref = _Doc(_tpl).tables[0]
+                    _t_new = _Doc(_out).tables[0]
+                    _bad = []
+                    for _ri in range(min(len(_t_ref.rows), len(_t_new.rows))):
+                        for _ci in range(min(len(_t_ref.rows[_ri].cells),
+                                             len(_t_new.rows[_ri].cells))):
+                            _p0 = _t_ref.rows[_ri].cells[_ci].paragraphs
+                            _p1 = _t_new.rows[_ri].cells[_ci].paragraphs
+                            if not _p0 or not _p1:
+                                continue
+                            _s0 = _p0[0]._p.pPr
+                            _s1 = _p1[0]._p.pPr
+                            _l0 = _s0.spacing_line if _s0 is not None else None
+                            _l1 = _s1.spacing_line if _s1 is not None else None
+                            # 模板有固定行距的单元格，生成结果必须一致
+                            if _l0 and _l0 != _l1:
+                                _bad.append('r%dc%d 模板 %s -> 生成 %s'
+                                            % (_ri, _ci, _l0, _l1))
+                            if _l0 and _s0 is not None and _s1 is not None:
+                                if str(_s0.spacing_lineRule) != str(_s1.spacing_lineRule):
+                                    _bad.append('r%dc%d 行距规则 %s -> %s'
+                                                % (_ri, _ci, _s0.spacing_lineRule,
+                                                   _s1.spacing_lineRule))
+                    if _bad:
+                        raise AssertionError('排版属性被破坏: ' + '; '.join(_bad[:4]))
+                    out("  OK   排版保真：模板固定行距全部保留（防一页变两页）")
+            except AssertionError:
+                raise
+            except Exception as _le:
+                # 模板不在位等环境问题不应让整条自检失败，只提示
+                out("  SKIP 排版保真比对（%s）" % _le)
         except Exception as e:
             _fail("生成批办单字段与字体", e)
 

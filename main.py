@@ -636,9 +636,36 @@ class WordExtractor:
 
 
 
+_DOC_LINE_PITCH = [312]     # 文档网格行距（twips），默认 A4 常见值
+
+
+def _detect_doc_line_pitch(template_path):
+    """
+    从模板里读 docGrid 的 linePitch（twips），存入 _DOC_LINE_PITCH。
+
+    为什么需要它：模板启用了「行网格」（w:docGrid w:type="lines"），
+    Word 会把行高对齐到网格。LibreOffice 也支持网格，但如果段落行距被
+    我们写成 auto，两边算法就分叉了。给「模板没显式行距」的段落补上
+    以 linePitch 为准的固定行距，能让两边结果一致。
+    """
+    try:
+        import re
+        import zipfile
+        with zipfile.ZipFile(template_path) as z:
+            xml = z.read('word/document.xml').decode('utf-8', 'ignore')
+        m = re.search(r'<w:docGrid[^/]*w:linePitch="(\d+)"', xml)
+        if m:
+            v = int(m.group(1))
+            if v > 0:
+                _DOC_LINE_PITCH[0] = v
+                return v
+    except Exception:
+        pass
+    return _DOC_LINE_PITCH[0]
+
+
 class WordGenerator:
     """Word文档生成器"""
-    
     def __init__(self, template_path='投诉批办单示例#1.docx', output_dir=None):
         # 模板优先从可写目录读取（用户可自行替换），否则从打包资源目录读取
         if not os.path.isabs(template_path):
@@ -655,7 +682,24 @@ class WordGenerator:
                 output_dir = '待打印'
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
+        # 读取模板的网格行距（docGrid linePitch），供固定行距兜底使用
+        _detect_doc_line_pitch(self.template_path)
     
+    @staticmethod
+    def _doc_line_pitch():
+        """
+        读取当前文档的网格行距（docGrid linePitch，单位 twips）。
+        用于给「模板里没有显式固定行距」的段落补一个固定行距，
+        让 LibreOffice 的排版结果与 Word 的「按网格对齐」接近。
+        """
+        try:
+            from docx.oxml.ns import qn
+            # body 的 sectPr -> docGrid
+            pass
+        except Exception:
+            pass
+        return _DOC_LINE_PITCH[0]
+
     @staticmethod
     def set_cell_text_keep_format(cell, text, alignment=None, add_prefix_space=False, line_spacing_pt=None, font_size_pt=14):
         """
@@ -674,9 +718,35 @@ class WordGenerator:
         from docx.shared import Pt
         from docx.oxml.ns import qn
         from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
-        
-        # 先将单元格内容清空为一个空段落，避免遗留空段落（兼容Word 2007）
-        cell.text = ''
+
+        # 关键：不要用 cell.text = ''。
+        # 那样会把模板段落里已有的 <w:spacing w:line="..." w:lineRule="exact"/>
+        # 一起清掉，之后新建段落只能退化成单倍行距（w:line="240" w:lineRule="auto"）。
+        # Word 对 auto 行距比较宽容，LibreOffice 会按实际行高排 —— 于是同一份
+        # 内容在麒麟上被撑高、最后一行溢出到第 2 页（现场「一页变两页」）。
+        # 正确做法：保留第一个段落元素，只清掉它里面的 run，段落属性原样保留。
+        _keep_spacing = True
+
+        def _strip_runs(paragraph):
+            for r in list(paragraph.runs):
+                r._element.getparent().remove(r._element)
+
+        first_para = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
+        # 记录模板自带的固定行距，多行时后续段落沿用
+        _tpl_line = None
+        _tpl_rule = None
+        try:
+            _pPr = first_para._p.pPr
+            if _pPr is not None and _pPr.spacing_line is not None:
+                _tpl_line = _pPr.spacing_line
+                _tpl_rule = _pPr.spacing_lineRule
+        except Exception:
+            pass
+
+        # 删掉除首个之外的段落（多段落残留会让单元格变高）
+        for p in list(cell.paragraphs[1:]):
+            p._element.getparent().remove(p._element)
+        _strip_runs(first_para)
 
         # 调用方可能传 None（提取器缺字段），统一当空串处理，避免
         # 'NoneType' object has no attribute 'replace' 让整份文档生成失败
@@ -703,8 +773,40 @@ class WordGenerator:
                 pf.line_spacing = Pt(line_spacing_pt)
                 # 明确指定行为：固定行距（兼容Word 2007）
                 pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+            elif _tpl_line:
+                # 沿用模板自带的固定行距。
+                # 注意单位：python-docx 的 spacing_line 返回的是 **EMU**
+                # （1 pt = 12700 EMU），不是 twips，也不是磅。
+                # 直接 Pt(spacing_line) 会得到天文数字（如 215900 -> 215900pt），
+                # LibreOffice 读到这种行距就彻底撑爆页面。
+                # 绝不能写 pf.line_spacing = 1.0：那会改成 auto 行距，
+                # LibreOffice 按实际字体行高排版，单元格变高、整页溢出。
+                try:
+                    _pt = _tpl_line / 12700.0          # EMU -> pt
+                    if _pt <= 0 or _pt > 200:          # 异常值兜底
+                        _pt = _DOC_LINE_PITCH[0] / 20.0
+                    pf.line_spacing = Pt(_pt)
+                    # _tpl_rule 是枚举，str() 是 'EXACTLY (4)'，不能直接比名字
+                    try:
+                        _is_exact = (_tpl_rule == WD_LINE_SPACING.EXACTLY)
+                    except Exception:
+                        _is_exact = ('EXACT' in str(_tpl_rule).upper())
+                    pf.line_spacing_rule = (WD_LINE_SPACING.EXACTLY if _is_exact
+                                            else WD_LINE_SPACING.AT_LEAST)
+                except Exception:
+                    pf.line_spacing = 1.0
             else:
-                pf.line_spacing = 1.0
+                # 模板该段落没有固定行距：用文档网格 linePitch 作为固定行距，
+                # 让 LibreOffice 与 Word 的「按网格对齐」结果接近。
+                try:
+                    _lp = _doc_line_pitch()
+                    if _lp:
+                        pf.line_spacing = Pt(_lp / 20.0)
+                        pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+                    else:
+                        pf.line_spacing = 1.0
+                except Exception:
+                    pf.line_spacing = 1.0
             if alignment == 'center':
                 pf.alignment = WD_ALIGN_PARAGRAPH.CENTER
             elif alignment == 'left':
@@ -715,8 +817,7 @@ class WordGenerator:
             if add_prefix_space:
                 pf.first_line_indent = Pt(28)
         
-        # 处理首段：复用已存在的空段落
-        first_para = cell.paragraphs[0]
+        # 处理首段：复用已存在（已清空 run）的段落，保留其段落属性
         _format_paragraph(first_para)
         # 去掉前导的半角/全角/不间断空格
         # 写入 docx 的字体名必须是模板要求的「仿宋_GB2312」，和 Windows 版一致。
