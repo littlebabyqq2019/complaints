@@ -407,6 +407,20 @@ def _try_soffice(src, work_dir, target_fmt, timeout=180):
     out_dir = tempfile.mkdtemp(prefix='lo_out_')
     try:
         safe_src = _safe_copy_for_conversion(src, stage, '.' + ext)
+
+        # 转 PDF 前去掉 docGrid（行网格）。
+        # LibreOffice 把网格当「最小行高」叠加在段落行距上，比 Word 高出
+        # 零点几磅；模板页边距紧，累积后表格后的「备注」被挤到第 2 页。
+        # 新生成的文档已在 main.strip_docgrid 里处理过，这里再兜一次，
+        # 是为了让「待打印」里遗留的旧文件（带 docGrid）也能一页打出来。
+        # 只作用于临时副本，不改用户的原文件。
+        if target_fmt == 'pdf' and ext == 'docx':
+            try:
+                import main as _main_mod
+                _main_mod.strip_docgrid(safe_src)
+            except Exception:
+                pass
+
         before = set()
         # 转换串，pdf 与 docx 的 filter 不同
         if target_fmt == 'pdf':

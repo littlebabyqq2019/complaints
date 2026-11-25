@@ -399,6 +399,32 @@ def main():
                 raise AssertionError('填充字体错误: %s' % _fonts)
             out("  OK   生成批办单：12345 / 信息中心 / 来文字号 / 仿宋_GB2312")
 
+            # 1b-2a) docGrid（行网格）必须被移除。
+            #        LibreOffice 把网格当「最小行高」叠加在段落行距上，比 Word
+            #        高出零点几磅；模板页边距紧，累积后「备注」被挤到第 2 页。
+            #        实测：带 docGrid 转 PDF = 2 页，去掉后 = 1 页（与 Word 一致）。
+            try:
+                import re as _re4
+                import zipfile as _zf4
+                with _zf4.ZipFile(_out) as _z4:
+                    _xml4 = _z4.read('word/document.xml').decode('utf-8', 'ignore')
+                _grids = _re4.findall(r'<w:docGrid\b[^>]*/>', _xml4)
+                if _grids:
+                    raise AssertionError('生成文档仍带 docGrid（会导致转 PDF 多一页）')
+                if not _re4.findall(r'<w:pgSz\b[^>]*/>', _xml4):
+                    raise AssertionError('sectPr 的纸张设置被误删')
+                if not _re4.findall(r'<w:pgMar\b[^>]*/>', _xml4):
+                    raise AssertionError('sectPr 的页边距被误删')
+                _auto4 = _xml4.count('w:lineRule="auto"')
+                if _auto4:
+                    raise AssertionError('存在 auto 行距 %d 处（LibreOffice 会撑高）'
+                                         % _auto4)
+                out("  OK   已移除 docGrid，且纸张/页边距/固定行距完好")
+            except AssertionError:
+                raise
+            except Exception as _e4:
+                out("  SKIP docGrid 校验（%s）" % _e4)
+
             # 1b-2b) 排版保真：生成的文档必须保留模板的固定行距。
             #        曾经把 lineRule="exact" 写成 auto，LibreOffice 按实际行高
             #        排版导致「一页变两页」。这里逐行比对行距是否被破坏。

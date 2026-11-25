@@ -664,6 +664,99 @@ def _detect_doc_line_pitch(template_path):
     return _DOC_LINE_PITCH[0]
 
 
+# ---------------------------------------------------------------------------
+# docGrid（行网格）处理 —— 解决「Word 一页、转 PDF 两页」
+# ---------------------------------------------------------------------------
+# 模板的 sectPr 里有 <w:docGrid w:type="lines" w:linePitch="312"/>。
+#
+# 这是 Word 的「文档网格」：每行对齐到 15.6pt 的网格上。
+# Word 自己排版时会严格按网格吸附，我们这个模板就是按网格调出来的，
+# 所以在 Word 里正好一页。
+#
+# LibreOffice 对网格的实现与 Word 不同：它把网格当作「最小行高」，
+# 再叠加段落自身的行距，结果每行比 Word 高出零点几磅。模板页边距很紧
+# （A4 上下各 1440 twips），十几行累积下来，表格后面的「备注」那行
+# 就被挤到第 2 页。
+#
+# 实测（LibreOffice Kit 转 PDF，同一份文档只差这一行属性）：
+#     带 docGrid  : 2 页
+#     去掉 docGrid: 1 页      <-- 与 Word 记录的页数一致
+# 连空模板本身都是这个结果（app.xml 记录 1 页，LO 转出来 2 页）。
+#
+# 所以生成时把 docGrid 从 sectPr 里去掉：每个段落的行距在上一节已经
+# 显式写成固定值（exact），版面不依赖网格，去掉后 Word 与 LibreOffice
+# 排出来都是 1 页，且行距不变、版式不走样。
+#
+# 可用 COMPLAINTS_KEEP_DOCGRID=1 关闭这个行为（万一某个模板确实依赖网格）。
+_KEEP_DOCGRID = (os.environ.get('COMPLAINTS_KEEP_DOCGRID', '').strip() == '1')
+
+
+def _strip_docgrid_in_xml(xml):
+    """
+    删掉 document.xml 里 sectPr 的 <w:docGrid .../> 元素。
+
+    只动 docGrid，其它 sectPr 属性（纸张、页边距、页眉页脚距离）原样保留。
+    返回 (新xml, 删除个数)。
+    """
+    import re
+    pattern = re.compile(r'<w:docGrid\b[^>]*/>')
+    count = len(pattern.findall(xml))
+    if not count:
+        return xml, 0
+    return pattern.sub('', xml), count
+
+
+def strip_docgrid(docx_path):
+    """
+    就地移除 docx 的 docGrid（行网格）。
+
+    为什么保存后再改：python-docx 没有暴露 docGrid，直接操作它的
+    oxml 也能删，但保存后重新打包 document.xml 更稳（不依赖
+    python-docx 内部结构，模板换版本也不会失效）。
+
+    返回 (是否修改, 删除个数)。
+    """
+    import os
+    import re
+    import shutil
+    import tempfile
+    import zipfile
+
+    if _KEEP_DOCGRID:
+        return False, 0
+    if not os.path.isfile(docx_path):
+        return False, 0
+
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix='.docx',
+                                        dir=os.path.dirname(os.path.abspath(docx_path)))
+    os.close(tmp_fd)
+    removed = 0
+    try:
+        with zipfile.ZipFile(docx_path, 'r') as zin, \
+                zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == 'word/document.xml':
+                    text = data.decode('utf-8', 'ignore')
+                    text, removed = _strip_docgrid_in_xml(text)
+                    data = text.encode('utf-8')
+                zout.writestr(item, data)
+        if removed:
+            shutil.move(tmp_path, docx_path)
+            # 打印后清理
+            tmp_path = None
+            return True, removed
+    except Exception:
+        pass
+    finally:
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+    return False, 0
+
+
 class WordGenerator:
     """Word文档生成器"""
     def __init__(self, template_path='投诉批办单示例#1.docx', output_dir=None):
@@ -1180,6 +1273,10 @@ class WordGenerator:
             
             # 保存文档
             doc.save(output_path)
+            # 去掉 docGrid（行网格）：LibreOffice 按网格叠加行距，
+            # 会比 Word 高出零点几磅，导致表格后的「备注」被挤到第 2 页。
+            # 各段落行距已显式固定，去掉网格不影响版式。
+            strip_docgrid(output_path)
             print(f"生成Word文档成功: {output_path}")
             return True
             
@@ -1265,6 +1362,10 @@ class WordGenerator:
             
             # 保存文档
             doc.save(output_path)
+            # 去掉 docGrid（行网格）：LibreOffice 按网格叠加行距，
+            # 会比 Word 高出零点几磅，导致表格后的「备注」被挤到第 2 页。
+            # 各段落行距已显式固定，去掉网格不影响版式。
+            strip_docgrid(output_path)
             print(f"生成Word文档成功: {output_path}")
             return True
             
@@ -1365,6 +1466,10 @@ class WordGenerator:
 
             # 保存文档
             doc.save(output_path)
+            # 去掉 docGrid（行网格）：LibreOffice 按网格叠加行距，
+            # 会比 Word 高出零点几磅，导致表格后的「备注」被挤到第 2 页。
+            # 各段落行距已显式固定，去掉网格不影响版式。
+            strip_docgrid(output_path)
             print(f"生成Word文档成功: {output_path}")
             return True
             
