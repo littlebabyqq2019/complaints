@@ -59,8 +59,8 @@ python3.10 -m pip install --no-cache-dir \
 # ---------- 4. 校验源码 ----------
 cd "${SRC}"
 python3.10 -m py_compile gui_app.py main.py database.py rule_engine.py \
-    rule_management_ui.py platform_compat.py ttk_compat.py ttk_gui_selftest.py ui_layout.py wps_compat.py emoji_compat.py
-python3.10 -c "import platform_compat, main, database, rule_engine, rule_management_ui, ttk_compat, ttk_gui_selftest, ui_layout, wps_compat, emoji_compat; print('模块导入通过')"
+    rule_management_ui.py platform_compat.py ttk_compat.py ttk_gui_selftest.py ui_layout.py wps_compat.py emoji_compat.py font_compat.py print_env.py
+python3.10 -c "import platform_compat, main, database, rule_engine, rule_management_ui, ttk_compat, ttk_gui_selftest, ui_layout, wps_compat, emoji_compat, font_compat, print_env; print('模块导入通过')"
 # ttkbootstrap 1.x/2.x 的控件别名校验（不需要图形环境）。2.x 去掉了 PanedWindow
 # 驼峰别名，若这里失败说明打包环境的 ttkbootstrap 版本越界，产物运行会启动失败。
 python3.10 -c "import ttk_compat; v,m = ttk_compat.verify_widgets(); assert not m, '缺少控件: ' + ','.join(m); print('ttk 控件校验通过:', ttk_compat.describe())"
@@ -108,6 +108,22 @@ if [ "${SELFTEST_RC}" -ne 0 ]; then
     exit 1
 fi
 echo "=== 产物自检通过 ==="
+
+# ---------- 5c. 校验 _internal 未打入会与系统冲突的基础库 ----------
+# 背景：Pillow 等依赖会把自带旧版 libfreetype/libfontconfig 收进 _internal，
+# PyInstaller 用 LD_LIBRARY_PATH 指向该目录，导致我们启动的 soffice
+# 加载到旧 freetype 并报 symbol lookup error: undefined symbol: FT_Done_MM_Var
+# （麒麟现场打印失败的真正原因）。spec 里已加排除规则，这里做兜底校验。
+echo "=== 检查 _internal 内的冲突系统库 ==="
+CONFLICT=$(find "${DIST_DIR}/_internal" -maxdepth 1 -type f \
+    \( -name 'libfreetype*' -o -name 'libfontconfig*' -o -name 'libcairo*' \
+       -o -name 'libpango*' -o -name 'libharfbuzz*' \) 2>/dev/null || true)
+if [ -n "${CONFLICT}" ]; then
+    echo "⚠ _internal 内仍有冲突系统库（运行期会自动剔除，但建议加排除规则）："
+    echo "${CONFLICT}" | sed 's/^/    /'
+else
+    echo "OK   _internal 内无 libfreetype/libfontconfig/libcairo 等冲突库"
+fi
 
 # ---------- 6. 校验产物架构与最高 GLIBC 符号版本 ----------
 EXE="${SRC}/dist/投诉批办单管理系统/投诉批办单管理系统"

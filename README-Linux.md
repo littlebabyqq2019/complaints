@@ -399,6 +399,55 @@ sudo apt remove --purge libreoffice-* && sudo apt install libreoffice-writer
 `file`/`ldd` 命令缺失就会让整个脚本中途退出，什么都看不到。
 现已改为 `set +u` / `set +e`，每项检查独立失败，保证一定打印出结论。
 
+## 三之十一、打包版库路径污染（FT_Done_MM_Var 的真正根因，2026-11-25）
+
+现场最终确认：**不是 LibreOffice 损坏，是库版本冲突**。
+
+机制：
+
+```
+PyInstaller 打包后，程序启动时会把自己 _internal/ 塞进 LD_LIBRARY_PATH。
+我们的 _internal 带着 Pillow 等依赖附带的旧版 libfreetype.so.6 /
+libfontconfig.so.1。
+
+调用 soffice 时子进程**继承**了这个 LD_LIBRARY_PATH，于是系统 libcairo
+去找 FT_Done_MM_Var 时，加载的是 _internal 里的旧 freetype —— 该符号
+不存在 —— 报：
+    symbol lookup error: undefined symbol: FT_Done_MM_Var
+```
+
+所以重装 LibreOffice 解决不了，LO 本身是好的。
+
+**两层修复**：
+
+1. **打包层（根治）**：`complaints-linux.spec` 新增
+   `_SYSTEM_LIB_PREFIXES` + `_filter_binaries()`，把 libfreetype /
+   libfontconfig / libcairo / libpango / libharfbuzz / libX11 等
+   「系统必然自带、ABI 稳定」的基础库排除出 `_internal`。
+   Pillow 等改用系统库（版本更新，功能不受影响）。
+
+2. **运行层（兜底）**：新增 `print_env.py`
+   - `clean_env()`：返回剔除应用自带库路径的环境变量，供**所有**
+     调用外部系统程序的地方使用（soffice / lp / unoconv / WPS /
+     xdg-open / fc-list / fc-cache）
+   - `sanitize_library_path()`：启动时清理本进程的 LD_LIBRARY_PATH
+   - `bundled_lib_report()`：自检 `_internal` 是否仍带冲突库
+   - 同时剔除 LD_PRELOAD / LD_AUDIT / PYTHONPATH / PYTHONHOME
+
+即使将来打包漏掉排除规则，运行层也保证子进程用系统库。
+
+**CI 校验**：构建脚本检查 `_internal` 内不再含冲突库；`--selftest`
+断言 `clean_env()` 确实剔除 `_internal` 且保留用户系统路径。
+
+**现场不需要做任何事**，装新包即可。想确认旧包状态可跑：
+
+```bash
+bash 修复打印.sh      # 只诊断，不改系统
+```
+
+它会告诉系统 freetype 有没有 `FT_Done_MM_Var`、cairo 实际加载哪个库、
+`_internal` 里是否还有冲突库，并给出处置办法。
+
 ## 四、目录与数据
 
 ```
@@ -413,6 +462,8 @@ sudo apt remove --purge libreoffice-* && sudo apt install libreoffice-writer
 ├── ui_layout.py             # 小屏/高DPI 布局适配：窗口自适应、滚轮、贴底按钮条
 ├── emoji_compat.py          # 按钮 emoji 兼容：麒麟无 emoji 字体时剥掉图标避免方框
 ├── font_compat.py           # 字体度量兼容：Windows 字体映射 + 页数校验（防一页变两页）
+├── print_env.py             # 外部程序环境清理：剔除 _internal 库路径（防 FT_Done_MM_Var）
+├── 修复打印.sh               # 打印故障诊断：定位 LO 缺符号 / 冲突库（只读）
 ├── ttk_gui_selftest.py      # 无头 GUI 冒烟测试（--selftest 入口）
 ├── 诊断.sh                  # 现场诊断：Tk / ttkbootstrap 版本 / 控件自检 / 启动日志
 ├── 投诉批办单示例#1.docx     # Word 模板

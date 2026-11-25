@@ -51,12 +51,27 @@ _FONT_ALIASES = {
 _CONF_NAME = "99-complaints-font-alias.conf"
 
 
+def _clean_env():
+    """外部字体命令用的干净环境（剔除应用自带库路径）。"""
+    try:
+        import print_env
+        return print_env.clean_env()
+    except Exception:
+        return None
+
+
 def _installed_families():
-    """读取 fontconfig 的已安装字体家族（小写比较用）。"""
+    """
+    读取 fontconfig 的已安装字体家族（小写比较用）。
+
+    必须用干净环境：打包版若让 fc-list 加载到 _internal 里的旧
+    libfontconfig，会解析不出系统字体（或解析结果异常），
+    从而误判「缺字体」并把版式调偏。
+    """
     if not shutil.which("fc-list"):
         return ""
     try:
-        r = subprocess.run(["fc-list", ":", "family"],
+        r = subprocess.run(["fc-list", ":", "family"], env=_clean_env(),
                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                            timeout=8)
         return (r.stdout or b"").decode("utf-8", "ignore")
@@ -157,7 +172,7 @@ def ensure_font_aliases(force=False):
                 f.write(content)
             # 刷新缓存，让 LibreOffice 立刻生效
             if shutil.which("fc-cache"):
-                subprocess.run(["fc-cache", "-f", d],
+                subprocess.run(["fc-cache", "-f", d], env=_clean_env(),
                                stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, timeout=30)
             return True, "已写入字体别名 %d 条：%s" % (mapped, target)

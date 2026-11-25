@@ -155,9 +155,19 @@ _FONT_CACHE = {}
 
 
 def _installed_families():
-    """一次性读取 fontconfig 的字体家族列表；失败时返回空串（交给 Tk 自行回退）。"""
+    """
+    一次性读取 fontconfig 的字体家族列表；失败时返回空串（交给 Tk 自行回退）。
+
+    fc-list 也必须用干净环境：打包版若让 fc-list 加载到 _internal 里的旧
+    libfontconfig，会解析不出系统字体，导致中文字体判断错误、版式偏移。
+    """
     try:
-        r = subprocess.run(["fc-list", ":", "family"],
+        import print_env
+        env = print_env.clean_env()
+    except Exception:
+        env = None
+    try:
+        r = subprocess.run(["fc-list", ":", "family"], env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
         return (r.stdout or b"").decode("utf-8", "ignore")
     except Exception:
@@ -211,14 +221,24 @@ def ui_font(family):
 # ---------------------------------------------------------------------------
 
 def open_path(path):
-    """用系统默认程序打开文件或目录，等价 Windows 的 os.startfile。"""
+    """
+    用系统默认程序打开文件或目录，等价 Windows 的 os.startfile。
+
+    xdg-open 同样要用干净环境：它最终调用桌面环境的程序（WPS、文档查看器），
+    若继承 _internal 的库路径，那些程序也可能起不来或字体异常。
+    """
     path = os.path.abspath(path)
     if IS_WINDOWS:
         os.startfile(path)  # noqa: F821  (仅 Windows 存在)
         return True
+    try:
+        import print_env
+        env = print_env.clean_env()
+    except Exception:
+        env = None
     if IS_MACOS:
         subprocess.Popen(["open", path], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
+                         stderr=subprocess.DEVNULL, start_new_session=True, env=env)
         return True
     for cmd in ("xdg-open", "gio", "gnome-open", "kde-open"):
         exe = shutil.which(cmd)
@@ -227,7 +247,8 @@ def open_path(path):
         argv = [exe, "open", path] if cmd == "gio" else [exe, path]
         try:
             subprocess.Popen(argv, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
+                             stderr=subprocess.DEVNULL, start_new_session=True,
+                             env=env)
             return True
         except OSError:
             continue
@@ -262,9 +283,28 @@ def _find_wps():
 
 
 def _run_office(cmd, timeout=120):
+    """
+    运行外部程序（soffice / lp / unoconv 等）。
+
+    关键：必须用 print_env.clean_env() 清除 LD_LIBRARY_PATH 里属于本应用
+    _internal/ 的路径。否则打包版的子进程会加载到我们自带的旧
+    libfreetype / libfontconfig，导致外部程序启动失败 —— 麒麟现场那次
+
+        soffice.bin: symbol lookup error:
+        /lib/aarch64-linux-gnu/libcairo.so.2: undefined symbol: FT_Done_MM_Var
+
+    就是这个原因（应用自带的旧 freetype 顶掉了系统的），
+    而不是 LibreOffice 本身损坏。
+    """
+    env = None
+    try:
+        import print_env
+        env = print_env.clean_env()
+    except Exception:
+        env = None
     try:
         return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              timeout=timeout)
+                              timeout=timeout, env=env)
     except Exception:
         return None
 
@@ -667,7 +707,12 @@ def print_file(path):
                 import wps_compat
                 exe = wps_compat.find_wps()
                 if exe:
-                    subprocess.Popen([exe, path],
+                    try:
+                        import print_env
+                        _env = print_env.clean_env()
+                    except Exception:
+                        _env = None
+                    subprocess.Popen([exe, path], env=_env,
                                      stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
                     return True, "已在 WPS 中打开，请用 WPS 的打印按钮打印"

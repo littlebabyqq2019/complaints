@@ -162,8 +162,17 @@ def _env_for_wps(home_dir):
     """
     构造隔离环境：WPS 首次启动会写 ~/.config/Kingsoft、弹用户协议/首页，
     用临时 HOME 可以避免污染用户配置并绕开部分首次运行弹窗。
+
+    同时必须剔除本应用自带的库路径（print_env.clean_env）：打包版的
+    _internal/ 里带着旧版 libfreetype / libfontconfig / libcairo，
+    若被子进程继承，WPS 的 Qt/字体栈会加载到旧库，轻则中文排版异常、
+    重则直接启动失败。这与 LibreOffice 那次 FT_Done_MM_Var 是同一类问题。
     """
-    env = os.environ.copy()
+    try:
+        import print_env
+        env = print_env.clean_env()
+    except Exception:
+        env = os.environ.copy()
     env["HOME"] = home_dir
     env["XDG_CONFIG_HOME"] = os.path.join(home_dir, ".config")
     env["XDG_CACHE_HOME"] = os.path.join(home_dir, ".cache")

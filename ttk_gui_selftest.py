@@ -226,6 +226,46 @@ def main():
     except Exception as e:
         _fail("LibreOffice 损坏识别", e)
 
+    # 1d-3) 打包版库路径污染防护：调用外部程序的子进程不得继承 _internal
+    #       （麒麟现场 FT_Done_MM_Var 缺符号的真正根因）
+    try:
+        import print_env as _pe
+        import tempfile as _tf5
+        import shutil as _sh5
+
+        _fake = os.path.join(_tf5.gettempdir(), 'selftest_meipass', '_internal')
+        os.makedirs(_fake, exist_ok=True)
+        try:
+            for _n in ('libfreetype.so.6', 'libfontconfig.so.1', 'libcairo.so.2'):
+                open(os.path.join(_fake, _n), 'wb').close()
+
+            _saved_env = dict(os.environ)
+            try:
+                os.environ['LD_LIBRARY_PATH'] = os.pathsep.join(
+                    [_fake, '/usr/local/lib'])
+                os.environ['LD_PRELOAD'] = '/x/libhack.so'
+                _env = _pe.clean_env()
+                if '_internal' in (_env.get('LD_LIBRARY_PATH') or ''):
+                    raise AssertionError('clean_env 未剔除 _internal 路径')
+                if '/usr/local/lib' not in (_env.get('LD_LIBRARY_PATH') or ''):
+                    raise AssertionError('clean_env 误删用户系统路径')
+                if 'LD_PRELOAD' in _env:
+                    raise AssertionError('clean_env 未清除 LD_PRELOAD')
+            finally:
+                os.environ.clear()
+                os.environ.update(_saved_env)
+
+            _rep = {os.path.basename(x)
+                    for x in _pe.bundled_lib_report([_fake])}
+            for _need in ('libfreetype.so.6', 'libfontconfig.so.1'):
+                if _need not in _rep:
+                    raise AssertionError('未报告冲突库: ' + _need)
+            out("  OK   库路径清理：_internal 不传给子进程，冲突库可识别")
+        finally:
+            _sh5.rmtree(os.path.dirname(_fake), ignore_errors=True)
+    except Exception as e:
+        _fail("库路径清理", e)
+
     # 1e) 「装了 LibreOffice 却仍转换失败」的关键防线：
     #     带 # & 空格 中文 的文件名必须被复制成安全名再转换
     #     （# 是 URI 片段分隔符，会让 LO 产物名字对不上而静默失败）

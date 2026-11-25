@@ -36,6 +36,7 @@ hiddenimports += [
     'tkinter.scrolledtext', 'tkinter.simpledialog',
     '_tkinter', 'sqlite3', 'platform_compat', 'ttk_compat',
     'ttk_gui_selftest', 'ui_layout', 'wps_compat', 'emoji_compat', 'font_compat',
+    'print_env',
     'asyncio', 'asyncio.unix_events', 'asyncio.selector_events',
 ]
 
@@ -58,6 +59,80 @@ datas += [
     res('print_delay_config.json', '.'),
 ]
 datas = [item for item in datas if os.path.exists(item[0])]
+
+
+# ---------------------------------------------------------------------------
+# 剔除不应打包的系统库
+# ---------------------------------------------------------------------------
+# 背景（麒麟现场 2026-11-25）：
+#   Pillow 等依赖会把自带的 libfreetype.so.6 / libfontconfig.so.1 收集进
+#   _internal/。PyInstaller 运行时会用 LD_LIBRARY_PATH 指向该目录，
+#   于是我们启动的 soffice 子进程继承了它，加载到旧版 freetype
+#   （缺 FT_Done_MM_Var），系统的 libcairo 找不到该符号 —— LibreOffice
+#   直接报 symbol lookup error，打印/转 PDF 全部失败。
+#
+# 修法有两层：
+#   1) 这里的 filter —— 根本不要把这类系统库打进来（最彻底）
+#   2) 运行期 print_env.clean_env() —— 即使漏打进来，子进程也用系统库
+#
+# 注意：只剔除「系统必然自带、且 ABI 稳定」的基础库。Python 扩展自己
+# 需要的库（如 libjpeg 之于 Pillow）不进这个列表，否则 Pillow 会坏。
+_SYSTEM_LIB_PREFIXES = (
+    'libfreetype',
+    'libfontconfig',
+    'libcairo',
+    'libpango',
+    'libharfbuzz',
+    'libglib-2.0',
+    'libgobject-2.0',
+    'libgio-2.0',
+    'libX11',
+    'libXext',
+    'libXrender',
+    'libxcb',
+    'libz.so',
+    'libexpat',
+    'libuuid',
+)
+
+
+def _is_conflicting_system_lib(dest):
+    """判断某个打包项的 dest 是否属于会与系统冲突的基础库。"""
+    name = os.path.basename(str(dest)).lower()
+    for p in _SYSTEM_LIB_PREFIXES:
+        if name.startswith(p.lower()):
+            return True
+    return False
+
+
+def _filter_binaries(items):
+    """
+    从 PyInstaller 的 binaries 列表里去掉冲突的系统库。
+
+    binaries 元素形态：(源路径, 打包内目标目录)。
+    目标目录为空表示放在 _internal 根目录 —— 正是这些会通过
+    LD_LIBRARY_PATH 顶掉系统库的位置。
+    """
+    kept = []
+    removed = []
+    for item in items:
+        try:
+            src, dest = item[0], item[1]
+        except Exception:
+            kept.append(item)
+            continue
+        # 只处理「放在根」或「放在 .libs」这类参与运行时库搜索的项
+        if _is_conflicting_system_lib(dest):
+            removed.append(os.path.basename(str(dest)))
+            continue
+        kept.append(item)
+    if removed:
+        print('[spec] 已排除 %d 个可能与系统冲突的库: %s'
+              % (len(removed), ', '.join(sorted(set(removed))[:8])))
+    return kept
+
+
+binaries = _filter_binaries(binaries)
 
 a = Analysis(
     ['gui_app.py'],

@@ -140,3 +140,28 @@
    真正干活的是 Word 而不是打印系统。Linux 上扮演这个角色的是
    LibreOffice / WPS，所以必须先由它转成 PDF，或由它自己调打印。
 
+十三、打印报「symbol lookup error / undefined symbol: FT_Done_MM_Var」
+   这不是 LibreOffice 坏了，也不是缺字体，而是「库版本冲突」：
+   打包版程序启动时会把自己目录下的库路径加到 LD_LIBRARY_PATH，
+   而我们目录里带着旧版 libfreetype，于是 LibreOffice 启动时加载到了
+   旧库，系统需要的 FT_Done_MM_Var 符号找不到，直接报错退出。
+
+   所以：重装 LibreOffice 没用（它本身是好的），装字体也没用。
+
+   本版本已从两层修好：
+     1) 打包时不再把 libfreetype / libfontconfig / libcairo 等
+        系统自带的基础库打进程序目录
+     2) 每次调用外部程序（LibreOffice、WPS、打印命令、字体命令）时，
+        自动清掉程序自己的库路径，让它们用系统自己的库
+
+   升级到最新发布包即可，不需要做任何配置。
+
+   若想确认旧包状态，可运行（只读，不改系统）：
+       bash 修复打印.sh
+   它会显示系统 freetype 有没有该符号、实际加载的是哪个库、
+   程序目录里是否还有冲突库，并给出处置建议。
+
+   在修好之前也能打印：用 WPS 打开批办单，点 WPS 的打印按钮，
+   或程序中「打印」菜单 -> 「在 WPS 中打开当前文件并手动打印」。
+
+

@@ -87,6 +87,23 @@ try:
 except Exception as e:
     print(f"  字体    : 检查失败 -> {e}")
 
+# 库路径：打包版把 _internal 塞进 LD_LIBRARY_PATH，会让 soffice 加载旧库，
+# 表现为 symbol lookup error: ... undefined symbol: FT_Done_MM_Var
+try:
+    import print_env as _pe
+    print(f"  库路径  : {_pe.describe()}")
+    _bad = _pe.bundled_lib_report()
+    if _bad:
+        import os as _os
+        print(f"            _internal 内含冲突库 {len(_bad)} 个:")
+        for _p in _bad[:6]:
+            print(f"              {_os.path.basename(_p)}")
+        print("            （调用外部程序时已自动剔除；彻底解决见 spec 排除规则）")
+    else:
+        print("            _internal 内无冲突系统库")
+except Exception as e:
+    print(f"  库路径  : 检查失败 -> {e}")
+
 # 打印链路：真做一次 Word->PDF 转换，确认「装了 LO 但转不出来」这类问题
 try:
     import platform_compat as _pc, tempfile, os, glob

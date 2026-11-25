@@ -64,11 +64,21 @@ def _env_pref():
 
 
 def _font_families():
-    """返回系统字体家族名（小写）。没有 fc-list 时返回空串。"""
+    """返回系统字体家族名（小写）。没有 fc-list 时返回空串。
+
+    fc-list 用干净环境：打包版若让它加载到 _internal 的旧 libfontconfig，
+    会读不到系统字体，从而误判「没有 emoji 字体」。
+    """
     if not shutil.which('fc-list'):
         return ''
     try:
-        r = subprocess.run(['fc-list', ':', 'family'], stdout=subprocess.PIPE,
+        import print_env
+        env = print_env.clean_env()
+    except Exception:
+        env = None
+    try:
+        r = subprocess.run(['fc-list', ':', 'family'], env=env,
+                           stdout=subprocess.PIPE,
                            stderr=subprocess.DEVNULL, timeout=8)
         return r.stdout.decode('utf-8', 'ignore').lower()
     except Exception:

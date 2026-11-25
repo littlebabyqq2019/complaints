@@ -3176,7 +3176,15 @@ class ComplaintManagementGUI:
                                      "系统未检测到 WPS。\n可用系统默认程序打开：\n"
                                      "  xdg-open 文件名")
                 return
-            subprocess.Popen([exe, self.current_file],
+            # 必须用干净环境启动 WPS：打包版 _internal 里的旧 libfreetype /
+            # libfontconfig 若被子进程继承，WPS 的字体栈会出问题（与
+            # LibreOffice 的 FT_Done_MM_Var 同类），中文排版可能错乱或起不来。
+            try:
+                from print_env import clean_env
+                _env = clean_env()
+            except Exception:
+                _env = None
+            subprocess.Popen([exe, self.current_file], env=_env,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.log(f"已在 WPS 中打开: {os.path.basename(self.current_file)}")
             messagebox.showinfo("已打开",
@@ -7028,6 +7036,22 @@ def main():
         except Exception as _wps_err:
             logging.warning(f"WPS 检测失败（不影响 WordML/OOXML 处理）: {_wps_err}")
         logging.info(f"✓ {emoji_status()}")
+        # 库路径清理：PyInstaller 打包版会把 _internal/ 塞进 LD_LIBRARY_PATH，
+        # 里面可能带着旧版 libfreetype / libfontconfig。我们自己进程里清掉，
+        # 更重要的是所有调用外部程序的地方都改用 print_env.clean_env()，
+        # 否则 soffice 会加载旧 freetype 并报 FT_Done_MM_Var 缺符号。
+        try:
+            import print_env
+            _old_lp, _new_lp = print_env.sanitize_library_path()
+            logging.info(f"✓ {print_env.describe()}")
+            _bundled = print_env.bundled_lib_report()
+            if _bundled:
+                logging.warning(
+                    "⚠ _internal 内含可能冲突的系统库 %d 个（调用外部程序时已剔除）：%s"
+                    % (len(_bundled),
+                       ", ".join(os.path.basename(x) for x in _bundled[:5])))
+        except Exception as _pe:
+            logging.warning(f"库路径清理失败（不影响使用）: {_pe}")
         # 字体度量兼容：模板用 Windows 字体，麒麟上缺失会导致转 PDF 后
         # 「一页变两页」。这里建立 fontconfig 别名（映射到度量接近的本地字体）。
         try:
