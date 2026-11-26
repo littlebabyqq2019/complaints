@@ -90,15 +90,23 @@ _SYSTEM_LIB_PREFIXES = (
     'libXext',
     'libXrender',
     'libxcb',
-    'libz.so',
     'libexpat',
     'libuuid',
 )
+# 说明：libz.so 不在此列。zlib 被多个扩展依赖，且冲突极少；
+# 排除它反而可能让某些模块找不到符号。只排「确认冲突且系统必有」的库。
 
 
-def _is_conflicting_system_lib(dest):
-    """判断某个打包项的 dest 是否属于会与系统冲突的基础库。"""
-    name = os.path.basename(str(dest)).lower()
+def _is_conflicting_system_lib(path):
+    """
+    判断某个路径的文件名是否属于会与系统冲突的基础库。
+
+    注意：判断依据是**文件名**，必须传源文件路径（src），
+    不能传打包目标目录（dest）。PyInstaller 的 binaries 项是
+    (src, dest)，其中 dest 常常就是 "."，拿它取 basename 永远是 "."
+    —— 之前就是这么写的，导致过滤函数一个都没排除掉。
+    """
+    name = os.path.basename(str(path)).lower()
     for p in _SYSTEM_LIB_PREFIXES:
         if name.startswith(p.lower()):
             return True
@@ -121,9 +129,10 @@ def _filter_binaries(items):
         except Exception:
             kept.append(item)
             continue
-        # 只处理「放在根」或「放在 .libs」这类参与运行时库搜索的项
-        if _is_conflicting_system_lib(dest):
-            removed.append(os.path.basename(str(dest)))
+        # 只处理「放在根」或「放在 .libs」这类参与运行时库搜索的项。
+        # 判定必须用 src 的文件名（dest 往往就是 "."）。
+        if _is_conflicting_system_lib(src):
+            removed.append(os.path.basename(str(src)))
             continue
         kept.append(item)
     if removed:
@@ -148,6 +157,21 @@ a = Analysis(
               'docx2pdf', 'pywin32'],
     noarchive=False,
 )
+
+# ---------------------------------------------------------------------------
+# Analysis 之后再过滤一次 —— 这一步才是真正生效的
+# ---------------------------------------------------------------------------
+# 上面传入 binaries= 的过滤只作用于「我们手动收集」的那部分；
+# PyInstaller 分析依赖图时，会把 Pillow 依赖的 libfreetype /
+# libfontconfig 等**重新加进** a.binaries（它们出现在 hook 与
+# binary dependency 扫描里），于是仍然被打进 _internal。
+# 实测：只在传参前过滤时，产物里 libfreetype.so.6 与
+# libfontconfig.so.1 依然存在。
+# 因此必须在 Analysis 结束后对 a.binaries 再过滤一次。
+_before_cnt = len(a.binaries)
+a.binaries = _filter_binaries(a.binaries)
+print('[spec] Analysis 后过滤 binaries: %d -> %d'
+      % (_before_cnt, len(a.binaries)))
 
 pyz = PYZ(a.pure)
 

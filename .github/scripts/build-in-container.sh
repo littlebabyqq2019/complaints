@@ -119,8 +119,14 @@ CONFLICT=$(find "${DIST_DIR}/_internal" -maxdepth 1 -type f \
     \( -name 'libfreetype*' -o -name 'libfontconfig*' -o -name 'libcairo*' \
        -o -name 'libpango*' -o -name 'libharfbuzz*' \) 2>/dev/null || true)
 if [ -n "${CONFLICT}" ]; then
-    echo "⚠ _internal 内仍有冲突系统库（运行期会自动剔除，但建议加排除规则）："
-    echo "${CONFLICT}" | sed 's/^/    /'
+    echo "!! _internal 内仍含冲突系统库，产物不可发布：" >&2
+    echo "${CONFLICT}" | sed 's/^/    /' >&2
+    echo "   原因：PyInstaller 会用 LD_LIBRARY_PATH 指向 _internal，" >&2
+    echo "   子进程 soffice 会加载到这里的旧 freetype，报" >&2
+    echo "   'undefined symbol: FT_Done_MM_Var'（麒麟打印失败的根因）。" >&2
+    echo "   修法：complaints-linux.spec 的 _filter_binaries 必须在" >&2
+    echo "   Analysis 之后对 a.binaries 再过滤一次。" >&2
+    exit 1
 else
     echo "OK   _internal 内无 libfreetype/libfontconfig/libcairo 等冲突库"
 fi
