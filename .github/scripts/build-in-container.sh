@@ -109,26 +109,68 @@ if [ "${SELFTEST_RC}" -ne 0 ]; then
 fi
 echo "=== 产物自检通过 ==="
 
-# ---------- 5c. 校验 _internal 未打入会与系统冲突的基础库 ----------
-# 背景：Pillow 等依赖会把自带旧版 libfreetype/libfontconfig 收进 _internal，
-# PyInstaller 用 LD_LIBRARY_PATH 指向该目录，导致我们启动的 soffice
-# 加载到旧 freetype 并报 symbol lookup error: undefined symbol: FT_Done_MM_Var
-# （麒麟现场打印失败的真正原因）。spec 里已加排除规则，这里做兜底校验。
-echo "=== 检查 _internal 内的冲突系统库 ==="
-CONFLICT=$(find "${DIST_DIR}/_internal" -maxdepth 1 -type f \
-    \( -name 'libfreetype*' -o -name 'libfontconfig*' -o -name 'libcairo*' \
-       -o -name 'libpango*' -o -name 'libharfbuzz*' \) 2>/dev/null || true)
-if [ -n "${CONFLICT}" ]; then
-    echo "!! _internal 内仍含冲突系统库，产物不可发布：" >&2
-    echo "${CONFLICT}" | sed 's/^/    /' >&2
-    echo "   原因：PyInstaller 会用 LD_LIBRARY_PATH 指向 _internal，" >&2
-    echo "   子进程 soffice 会加载到这里的旧 freetype，报" >&2
-    echo "   'undefined symbol: FT_Done_MM_Var'（麒麟打印失败的根因）。" >&2
-    echo "   修法：complaints-linux.spec 的 _filter_binaries 必须在" >&2
-    echo "   Analysis 之后对 a.binaries 再过滤一次。" >&2
-    exit 1
+# ---------- 5c. 用系统库替换 _internal 里的旧 freetype / fontconfig ----------
+# 背景：Pillow 等依赖把旧版 libfreetype.so.6 / libfontconfig.so.1 打进
+# _internal。PyInstaller 用 LD_LIBRARY_PATH 指向该目录，我们启动的 soffice
+# 子进程继承后加载到旧 freetype，而系统 libcairo 需要 FT_Done_MM_Var
+# （旧 freetype 没有）—— 报 symbol lookup error，打印/转 PDF 全挂。
+#
+# 为什么不用 spec 的排除规则：PyInstaller 的依赖库是成套改名的
+# （libxcb-<hash>.so.x），删掉会打断依赖链导致产物起不来（已实测崩过）。
+# 而且 Tk 的字体栈本身就要 freetype/fontconfig。
+#
+# 所以采用「替换」而不是「删除」：保留文件名与 hashed 名不变，只把内容
+# 换成构建机上的系统版本（glibc 基线容器里的 freetype 含所需符号）。
+#
+# 若构建机没有同名系统库，则跳过并给出提示，不影响构建。
+echo "=== 用系统库替换 _internal 内的 freetype / fontconfig ==="
+REPLACED=0
+for f in "${DIST_DIR}/_internal"/libfreetype*.so* "${DIST_DIR}/_internal"/libfontconfig*.so*; do
+    [ -e "$f" ] || continue
+    base=$(basename "$f")
+    # 去掉 PyInstaller 加的 hash 段：libfreetype-e3eca772.so.6.20.1 -> libfreetype.so.6
+    plain=$(echo "$base" | sed -E 's/^lib(freetype|fontconfig)-[0-9a-f]+\.so/lib\1.so/')
+    # 库族名（libfreetype / libfontconfig），用于最后的模糊兜底
+    fam=$(echo "$base" | sed -E 's/^(-?lib(freetype|fontconfig)).*/\1/')
+    syslib=""
+    for cand in "/lib/$(uname -m)-linux-gnu/$plain" \
+                "/usr/lib/$(uname -m)-linux-gnu/$plain" \
+                "/lib/$plain" "/usr/lib/$plain"; do
+        if [ -f "$cand" ]; then syslib="$cand"; break; fi
+    done
+    # 再按 soname 模糊找（版本号可能略有不同）
+    if [ -z "$syslib" ]; then
+        syslib=$(ls /lib/*-linux-gnu/${plain%.so*}*.so.* 2>/dev/null | head -1 || true)
+    fi
+    # 最后按库族名兜底：系统里任意 libfreetype.so.* 都算
+    if [ -z "$syslib" ] && [ -n "$fam" ]; then
+        syslib=$(ls /lib/*-linux-gnu/${fam}.so* /usr/lib/*-linux-gnu/${fam}.so* \
+                       /lib/${fam}.so* /usr/lib/${fam}.so* 2>/dev/null | head -1 || true)
+    fi
+    if [ -n "$syslib" ] && [ -f "$syslib" ]; then
+        cp -f "$syslib" "$f"
+        echo "    替换 $base  <-  $syslib"
+        REPLACED=$((REPLACED + 1))
+    else
+        echo "    (跳过) $base 未找到对应系统库 $plain"
+    fi
+done
+if [ "${REPLACED}" -gt 0 ]; then
+    echo "OK   已用系统库替换 ${REPLACED} 个文件"
 else
-    echo "OK   _internal 内无 libfreetype/libfontconfig/libcairo 等冲突库"
+    echo "提示 _internal 内没有需要替换的 freetype/fontconfig"
+fi
+# 校验：替换后 _internal 里的 freetype 必须含 FT_Done_MM_Var
+FT_CHECK=$(find "${DIST_DIR}/_internal" -maxdepth 1 -name 'libfreetype*.so*' | head -1)
+if [ -n "${FT_CHECK}" ]; then
+    if nm -D "${FT_CHECK}" 2>/dev/null | grep -q FT_Done_MM_Var \
+       || strings -a "${FT_CHECK}" 2>/dev/null | grep -q FT_Done_MM_Var; then
+        echo "OK   _internal 内的 freetype 含 FT_Done_MM_Var"
+    else
+        echo "!! _internal 内的 freetype 仍缺 FT_Done_MM_Var，soffice 会启动失败" >&2
+        echo "   文件: ${FT_CHECK}" >&2
+        exit 1
+    fi
 fi
 
 # ---------- 6. 校验产物架构与最高 GLIBC 符号版本 ----------

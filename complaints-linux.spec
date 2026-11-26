@@ -75,26 +75,26 @@ datas = [item for item in datas if os.path.exists(item[0])]
 #   1) 这里的 filter —— 根本不要把这类系统库打进来（最彻底）
 #   2) 运行期 print_env.clean_env() —— 即使漏打进来，子进程也用系统库
 #
-# 注意：只剔除「系统必然自带、且 ABI 稳定」的基础库。Python 扩展自己
-# 需要的库（如 libjpeg 之于 Pillow）不进这个列表，否则 Pillow 会坏。
-_SYSTEM_LIB_PREFIXES = (
-    'libfreetype',
-    'libfontconfig',
-    'libcairo',
-    'libpango',
-    'libharfbuzz',
-    'libglib-2.0',
-    'libgobject-2.0',
-    'libgio-2.0',
-    'libX11',
-    'libXext',
-    'libXrender',
-    'libxcb',
-    'libexpat',
-    'libuuid',
-)
-# 说明：libz.so 不在此列。zlib 被多个扩展依赖，且冲突极少；
-# 排除它反而可能让某些模块找不到符号。只排「确认冲突且系统必有」的库。
+# 注意（2026-11-26 实测教训，两次都踩坑）：
+#
+# 曾试图在这里「排除」冲突库，但 PyInstaller 的依赖库是**成套改名**的
+# （如 libxcb-46a603a8.so.1.1.0），互相按 hashed 名引用。删掉其中几个
+# 会打断依赖链，产物启动直接崩：
+#     ImportError: libxcb-46a603a8.so.1.1.0: cannot open shared object file
+#
+# 而且 libfreetype / libfontconfig 正是 Tk 字体栈需要的
+# （Tk -> libXft -> fontconfig -> freetype），本进程自己也要用，
+# 不能简单删掉。
+#
+# 所以：**这里不再排除任何库**，保持打包完整。
+# 旧版 freetype 的问题改由两道措施解决（都在打包脚本里/运行期）：
+#   1) 构建脚本在 PyInstaller 之后，把 _internal 里的
+#      libfreetype*.so* / libfontconfig*.so* 换成系统版本
+#      （系统版本含 FT_Done_MM_Var，这正是麒麟缺的符号）
+#   2) 运行期 print_env.clean_env() 让所有子进程用系统库
+_SYSTEM_LIB_PREFIXES = ()
+# 说明：留空是刻意为之。过滤函数仍在（下面），但当前不排除任何库，
+# 以免再次打断 PyInstaller 的 hashed 依赖链。
 
 
 def _is_conflicting_system_lib(path):
