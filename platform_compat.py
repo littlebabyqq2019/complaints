@@ -345,6 +345,7 @@ def _pick_produced(work_dir, before, ext):
 
 _LAST_CONVERT_ERROR = ['']
 _LAST_PAGE_WARNING = ['']
+_LAST_ROW_CLIP = ['']
 # LibreOffice 本机是否「自身损坏」（缺符号/缺库），一旦确认就不再重试
 _LO_BROKEN = ['']
 
@@ -496,6 +497,59 @@ def _verify_page_count(word_path, pdf_path):
     return ''
 
 
+def _check_row_clipping(word_path):
+    """
+    检查 docx 里是否存在「固定行高(exact)小于内容所需」的行。
+
+    背景：合并批办单后来文字号可能是多行，用户会手动调小其它行高来压回
+    一页。如果有人把**含多行内容的那一行**设成 hRule="exact" 且值偏小，
+    Word/LibreOffice 都会把超出部分**裁掉**（内容看不见但不报错），
+    打出来就是残缺的表格。
+
+    这里按行做粗略估算：该行段落数 × 该行字号对应行高，与 trHeight 比较。
+    只做提醒，不修改文件（避免破坏用户的手工排版）。
+    """
+    import re
+    import zipfile
+    try:
+        with zipfile.ZipFile(word_path) as z:
+            doc = z.read('word/document.xml').decode('utf-8', 'ignore')
+    except Exception:
+        return ''
+
+    rows = re.findall(r'<w:tr\b.*?</w:tr>', doc, re.S)
+    for i, row in enumerate(rows):
+        m = re.search(r'<w:trHeight w:val="(\d+)"(?:\s+w:hRule="(\w+)")?', row)
+        if not m:
+            continue
+        val = int(m.group(1))
+        rule = (m.group(2) or '').lower()
+        if rule != 'exact':
+            continue
+        # 该行每个单元格的段落数与字号（取该行最大字号，半磅单位）
+        szs = [int(x) for x in re.findall(r'<w:sz w:val="(\d+)"/>', row)]
+        sz_pt = (max(szs) / 2.0) if szs else 14.0
+        # 每个单元格里非空段落数（多行内容的判断依据）
+        cells = re.findall(r'<w:tc>.*?</w:tc>', row, re.S)
+        max_lines = 1
+        for c in cells:
+            n = len([p for p in re.findall(r'<w:p\b.*?</w:p>', c, re.S)
+                     if re.search(r'<w:t[^>]*>\S', p)])
+            max_lines = max(max_lines, n or 1)
+        # 内容大致所需高度（twips）：行数 × 字号 × 1.25 行距
+        need = max_lines * sz_pt * 1.25 * 20
+        if val + 20 < need:
+            return ('第 %d 行固定行高可能过小（设置 %d twips ≈ %.1fpt，'
+                    '但 %d 行内容约需 %.1fpt），超出的文字会被裁掉。'
+                    % (i + 1, val, val / 20.0, max_lines, need / 20.0))
+    return ''
+
+
+def row_clip_warning():
+    """最近一次转换的「行高裁切」提醒（可能为空）。"""
+    return _LAST_ROW_CLIP[0]
+
+
 def word_to_pdf(word_path, out_pdf_path=None):
     """
     Word -> PDF。
@@ -503,6 +557,7 @@ def word_to_pdf(word_path, out_pdf_path=None):
       Linux  : LibreOffice 优先（唯一可靠），WPS 兜底，unoconv 最后
     成功返回 PDF 路径，失败返回 None；失败原因见 last_convert_error()。
     页数变化会写入 _LAST_PAGE_WARNING（见 page_warning()）。
+    固定行高可能裁切内容时写入 _LAST_ROW_CLIP（见 row_clip_warning()）。
     """
     word_path = os.path.abspath(word_path)
     base = os.path.splitext(os.path.basename(word_path))[0]
@@ -534,6 +589,7 @@ def word_to_pdf(word_path, out_pdf_path=None):
         try:
             shutil.move(pdf, out_pdf_path)
             _LAST_PAGE_WARNING[0] = _verify_page_count(word_path, out_pdf_path)
+            _LAST_ROW_CLIP[0] = _check_row_clipping(word_path)
             return out_pdf_path
         except OSError:
             pass
@@ -553,6 +609,7 @@ def word_to_pdf(word_path, out_pdf_path=None):
                             pass
                     shutil.move(wps_out, out_pdf_path)
                     _LAST_PAGE_WARNING[0] = _verify_page_count(word_path, out_pdf_path)
+                    _LAST_ROW_CLIP[0] = _check_row_clipping(word_path)
                     return out_pdf_path
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -576,6 +633,7 @@ def word_to_pdf(word_path, out_pdf_path=None):
                         pass
                 shutil.move(produced, out_pdf_path)
                 _LAST_PAGE_WARNING[0] = _verify_page_count(word_path, out_pdf_path)
+                _LAST_ROW_CLIP[0] = _check_row_clipping(word_path)
                 return out_pdf_path
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)

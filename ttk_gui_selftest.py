@@ -420,6 +420,31 @@ def main():
                     raise AssertionError('存在 auto 行距 %d 处（LibreOffice 会撑高）'
                                          % _auto4)
                 out("  OK   已移除 docGrid，且纸张/页边距/固定行距完好")
+
+                # 1b-2a-2) 删网格后必须补齐「靠网格撑高」的排版：
+                #   · 表格中无 trHeight（或过小）的行 -> 640 twips atLeast
+                #   · 标题段落 -> before=100 twips
+                #   · 标题与表格之间的空行 -> line=430 twips
+                # 不补的话表格行会塌 36%、表格整体上移，现场反馈「表格完全变了样」。
+                _rows4 = _re4.findall(r'<w:tr\b.*?</w:tr>', _xml4, _re4.S)
+                _missing4 = [i for i, r in enumerate(_rows4)
+                             if '<w:trHeight' not in r]
+                if _missing4:
+                    raise AssertionError(
+                        '有 %d 个表格行没补行高（会塌陷）: %s'
+                        % (len(_missing4), _missing4[:4]))
+                # 已有 trHeight 但值过小的行，也必须被抬到 640（否则同样塌陷）
+                for _i4, _r4 in enumerate(_rows4):
+                    _m4 = _re4.search(r'<w:trHeight w:val="(\d+)"', _r4)
+                    if _m4 and int(_m4.group(1)) < 640:
+                        raise AssertionError(
+                            '第 %d 行行高仍过小（%s < 640），会裁切或塌陷'
+                            % (_i4, _m4.group(1)))
+                if not _re4.search(r'<w:spacing w:before="100"', _xml4):
+                    raise AssertionError('标题段落缺少 before=100 补偿')
+                if not _re4.search(r'<w:spacing w:line="430"', _xml4):
+                    raise AssertionError('标题与表格之间的空行缺少 line=430 补偿')
+                out("  OK   网格补偿完整：行高/标题段前距/空行行高")
             except AssertionError:
                 raise
             except Exception as _e4:

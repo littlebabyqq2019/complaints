@@ -3232,11 +3232,20 @@ class ComplaintManagementGUI:
             self.log(f"已发送打印: {filename} ({info})")
             # 页数变化（转 PDF 后一页变两页）单独提示，不打断打印
             try:
-                from platform_compat import page_warning
+                from platform_compat import page_warning, row_clip_warning
                 _pw = page_warning()
                 if _pw:
                     self.log("⚠ " + _pw.replace("\n", " "))
                     messagebox.showwarning("打印版式提醒", _pw)
+                # 固定行高把多行内容裁掉的情况：合并后手调行高时容易发生
+                _rc = row_clip_warning()
+                if _rc:
+                    self.log("⚠ " + _rc.replace("\n", " "))
+                    messagebox.showwarning(
+                        "行高可能裁切内容",
+                        _rc + "\n\n建议把这一行的行高规则改为「最小值」"
+                               "（Word：表格属性 → 行 → 指定高度 → 最小值），"
+                               "或适当加大该行高度后重新打印。")
             except Exception:
                 pass
             

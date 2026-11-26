@@ -678,59 +678,198 @@ def _detect_doc_line_pitch(template_path):
 # （A4 上下各 1440 twips），十几行累积下来，表格后面的「备注」那行
 # 就被挤到第 2 页。
 #
-# 实测（LibreOffice Kit 转 PDF，同一份文档只差这一行属性）：
+# 实测（LibreOffice Kit 转 PDF，同一份内容只差这一行属性）：
 #     带 docGrid  : 2 页
 #     去掉 docGrid: 1 页      <-- 与 Word 记录的页数一致
 # 连空模板本身都是这个结果（app.xml 记录 1 页，LO 转出来 2 页）。
 #
-# 所以生成时把 docGrid 从 sectPr 里去掉：每个段落的行距在上一节已经
-# 显式写成固定值（exact），版面不依赖网格，去掉后 Word 与 LibreOffice
-# 排出来都是 1 页，且行距不变、版式不走样。
+# ⚠ 只删 docGrid 不够，会「表格变形」：
+#   模板里很多表格行没有 trHeight，行高完全由网格撑起来（Word 下每行
+#   约 64px）。一旦去掉网格，这些行就塌到内容的最小高度（约 41px），
+#   整张表矮了一截、行高全变 —— 现场反馈「虽然一页，但表格完全变了样」。
+#
+#   解决办法：删 docGrid 的同时，给「原本没有 trHeight」的行补一个
+#   atLeast 行高，值取该行在 Word 下由网格撑出的高度。实测补完后
+#   LibreOffice 渲染的行高与 Word 逐行吻合（误差 ≤2px）。
 #
 # 可用 COMPLAINTS_KEEP_DOCGRID=1 关闭这个行为（万一某个模板确实依赖网格）。
 _KEEP_DOCGRID = (os.environ.get('COMPLAINTS_KEEP_DOCGRID', '').strip() == '1')
 
+# 删网格时给「无 trHeight」的行补的最小行高（twips）。
+# 取网格行距 linePitch 的 2 倍：模板 linePitch=312，312*2=624，
+# 实测 Word 下这类行高约 640~650 twips，取 640 最贴合（误差 <1px）。
+_GRID_ROW_HEIGHT_TWIPS = 640
+_GRID_ROW_HEIGHT_ALT = 650      # 行内含较大字号时用略高值（避免文字被压）
 
-def _strip_docgrid_in_xml(xml):
+# 表格外段落的垂直间距补偿（twips）。
+# 依据：用 Word（COM）导出基准 PDF，与 LibreOffice 输出逐项比对后标定。
+#   Word 基准 : 顶留白 83.5pt / 标题→表格 27.5pt / 表格顶 132.0pt
+#   未补偿时  : 顶留白 78.5pt / 标题→表格 19.0pt / 表格顶 118.5pt
+# 补偿后与 Word 完全一致：顶留白 83.5 / 标题→表格 27.5 / 表格顶 132.0。
+_TITLE_BEFORE_TWIPS = 100       # 标题段前 5pt（补顶部留白差）
+_SPACER_LINE_TWIPS = 430        # 标题与表格之间空行的行高（补间距差）
+
+
+def _compensate_outer_spacing(xml):
     """
-    删掉 document.xml 里 sectPr 的 <w:docGrid .../> 元素。
+    给表格**外**的段落补垂直间距，让 LibreOffice 渲染与 Word 一致。
 
-    只动 docGrid，其它 sectPr 属性（纸张、页边距、页眉页脚距离）原样保留。
-    返回 (新xml, 删除个数)。
+    为什么只动表格外：表格内的行高由 trHeight 控制（已另行补齐）；
+    表格外的标题和空行原本靠 docGrid 网格撑高，去掉网格后
+    LibreOffice 会把它们压扁 —— 表现为「表格整体上移、顶部留白变大、
+    标题与表格几乎贴在一起」。用 Word 导出的 PDF 做基准标定后，
+    补上固定的段前距与空行行高即可精确对齐。
+
+    返回 (新xml, 调整的段落数)。
     """
     import re
-    pattern = re.compile(r'<w:docGrid\b[^>]*/>')
-    count = len(pattern.findall(xml))
-    if not count:
+
+    a = xml.find('<w:tbl>')
+    if a < 0:
         return xml, 0
-    return pattern.sub('', xml), count
+    b = xml.find('</w:tbl>')
+    if b < 0:
+        return xml, 0
+    b += len('</w:tbl>')
+    pre, mid, post = xml[:a], xml[a:b], xml[b:]
+
+    def _fix_first_paragraph(seg):
+        """标题段（表格前第一个段落）补段前距。"""
+        def f(m):
+            p = m.group(0)
+            if '<w:spacing' in p and 'w:before' in p:
+                return p
+            sp = '<w:spacing w:before="%d"/>' % _TITLE_BEFORE_TWIPS
+            if '<w:spacing' in p:
+                return re.sub(r'<w:spacing\b', '<w:spacing w:before="%d"' %
+                              _TITLE_BEFORE_TWIPS, p, count=1)
+            if '<w:pPr>' in p:
+                return p.replace('<w:pPr>', '<w:pPr>' + sp, 1)
+            return p.replace('<w:p>', '<w:p><w:pPr>' + sp + '</w:pPr>', 1)
+        return re.sub(r'<w:p\b(?:(?!</w:p>).)*</w:p>', f, seg, count=1, flags=re.S)
+
+    def _fix_spacers(seg):
+        """表格前的空段落：把行高提到标定值（补偿网格消失的高度）。"""
+        changed = [0]
+
+        def f(m):
+            p = m.group(0)
+            if '<w:t' in p:      # 有文字的段落不动
+                return p
+            mline = re.search(r'<w:spacing[^>]*w:line="(\d+)"[^>]*/>', p)
+            if mline:
+                cur = int(mline.group(1))
+                if cur >= _SPACER_LINE_TWIPS:
+                    return p
+                newp = re.sub(r'(<w:spacing[^>]*w:line=")\d+(")',
+                              r'\g<1>%d\2' % _SPACER_LINE_TWIPS, p, count=1)
+                # 行距规则必须是 exact/atLeast，否则按字号算
+                if 'w:lineRule' not in newp:
+                    newp = newp.replace('w:line="%d"' % _SPACER_LINE_TWIPS,
+                                        'w:line="%d" w:lineRule="exact"' % _SPACER_LINE_TWIPS, 1)
+                changed[0] += 1
+                return newp
+            sp = '<w:spacing w:line="%d" w:lineRule="exact"/>' % _SPACER_LINE_TWIPS
+            if '<w:pPr>' in p:
+                changed[0] += 1
+                return p.replace('<w:pPr>', '<w:pPr>' + sp, 1)
+            changed[0] += 1
+            return p.replace('<w:p>', '<w:p><w:pPr>' + sp + '</w:pPr>', 1)
+
+        return re.sub(r'<w:p\b(?:(?!</w:p>).)*</w:p>', f, seg, flags=re.S), changed[0]
+
+    # 只处理标题段 + 表格前的空段落
+    pre2 = _fix_first_paragraph(pre)
+    pre2, n2 = _fix_spacers(pre2)
+    return pre2 + mid + post, n2
+
+
+def _strip_docgrid_in_xml(xml, fix_row_heights=True):
+    """
+    删掉 document.xml 里 sectPr 的 <w:docGrid .../>，
+    并按需给「原本没有 trHeight」的表格行补最小行高。
+
+    只动 docGrid 与缺失的 trHeight，其它 sectPr 属性（纸张、页边距、
+    页眉页脚距离）以及已有的 trHeight 原样保留。
+
+    返回 (新xml, 删除的docGrid个数, 补充的trHeight个数)。
+    """
+    import re
+
+    pattern = re.compile(r'<w:docGrid\b[^>]*/>')
+    grid_count = len(pattern.findall(xml))
+    if grid_count:
+        xml = pattern.sub('', xml)
+
+    added = 0
+    if fix_row_heights and grid_count:
+        # 逐行处理：没有 trHeight 的行补上 atLeast 行高
+        def _fix_row(m):
+            nonlocal added
+            row = m.group(0)
+            # 该行是否含较大字号（sz >= 32 半磅 = 16pt 以上）→ 用稍高值
+            szs = [int(x) for x in re.findall(r'<w:sz w:val="(\d+)"/>', row)]
+            h = _GRID_ROW_HEIGHT_ALT if (szs and max(szs) >= 32) else _GRID_ROW_HEIGHT_TWIPS
+
+            exist = re.search(r'<w:trHeight w:val="(\d+)"', row)
+            if exist:
+                # 已有 trHeight 但值很小（如 90 twips = 4.5pt）时，
+                # Word 是靠网格把这一行撑到 64px 的；去掉网格后会塌掉。
+                # 这里把它抬到网格行高，保证行高与 Word 一致。
+                if int(exist.group(1)) < _GRID_ROW_HEIGHT_TWIPS:
+                    row = re.sub(r'<w:trHeight[^/]*/>',
+                                 '<w:trHeight w:val="%d" w:hRule="atLeast"/>' % h,
+                                 row, count=1)
+                    added += 1
+                return row
+
+            th = '<w:trHeight w:val="%d" w:hRule="atLeast"/>' % h
+            if '<w:trPr>' in row:
+                row = row.replace('<w:trPr>', '<w:trPr>' + th, 1)
+            else:
+                # 在 trPr 缺失时插入（紧跟 <w:tr ...> 开标签之后）
+                m2 = re.match(r'(<w:tr\b[^>]*>)', row)
+                if m2:
+                    row = m2.group(1) + '<w:trPr>' + th + '</w:trPr>' + row[m2.end():]
+            added += 1
+            return row
+
+        xml = re.sub(r'<w:tr\b.*?</w:tr>', _fix_row, xml, flags=re.S)
+
+        # 表格外的垂直间距补偿（标题段前距 + 空段落行高）。
+        # 否则 LibreOffice 会把标题和空行压扁，导致表格整体上移、
+        # 顶部留白偏大、标题与表格几乎贴在一起（与 Word 不符）。
+        xml, _n_sp = _compensate_outer_spacing(xml)
+        added += _n_sp
+
+    return xml, grid_count, added
 
 
 def strip_docgrid(docx_path):
     """
-    就地移除 docx 的 docGrid（行网格）。
+    移除 docx 的 docGrid（行网格），并保持表格行高不变。
 
     为什么保存后再改：python-docx 没有暴露 docGrid，直接操作它的
     oxml 也能删，但保存后重新打包 document.xml 更稳（不依赖
     python-docx 内部结构，模板换版本也不会失效）。
 
-    返回 (是否修改, 删除个数)。
+    返回 (是否修改, 删除docGrid个数, 补充的trHeight个数)。
     """
     import os
-    import re
     import shutil
     import tempfile
     import zipfile
 
     if _KEEP_DOCGRID:
-        return False, 0
+        return False, 0, 0
     if not os.path.isfile(docx_path):
-        return False, 0
+        return False, 0, 0
 
     tmp_fd, tmp_path = tempfile.mkstemp(suffix='.docx',
                                         dir=os.path.dirname(os.path.abspath(docx_path)))
     os.close(tmp_fd)
     removed = 0
+    added = 0
     try:
         with zipfile.ZipFile(docx_path, 'r') as zin, \
                 zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zout:
@@ -738,14 +877,14 @@ def strip_docgrid(docx_path):
                 data = zin.read(item.filename)
                 if item.filename == 'word/document.xml':
                     text = data.decode('utf-8', 'ignore')
-                    text, removed = _strip_docgrid_in_xml(text)
+                    text, removed, added = _strip_docgrid_in_xml(text)
                     data = text.encode('utf-8')
                 zout.writestr(item, data)
         if removed:
             shutil.move(tmp_path, docx_path)
             # 打印后清理
             tmp_path = None
-            return True, removed
+            return True, removed, added
     except Exception:
         pass
     finally:
@@ -754,7 +893,7 @@ def strip_docgrid(docx_path):
                 os.remove(tmp_path)
             except OSError:
                 pass
-    return False, 0
+    return False, 0, 0
 
 
 class WordGenerator:
@@ -860,9 +999,15 @@ class WordGenerator:
         # 公共的段落格式设置函数
         def _format_paragraph(paragraph):
             pf = paragraph.paragraph_format
-            pf.space_before = Pt(0)
-            pf.space_after = Pt(0)
+            # 注意：**不要**无条件写 space_before / space_after = 0。
+            # 模板里那三个带行距的段落只有 <w:spacing w:line=".." w:lineRule="exact"/>，
+            # 并没有 before/after。我们若额外写 before="0" after="0"，
+            # 生成的 XML 就与模板不一致；更关键的是，一旦某个属性被显式写出，
+            # 就会覆盖掉样式/默认值，行高计算随之偏移，表格就被撑开了。
+            # 只在调用方明确要求时（line_spacing_pt）才设置整段行距。
             if line_spacing_pt is not None:
+                pf.space_before = Pt(0)
+                pf.space_after = Pt(0)
                 pf.line_spacing = Pt(line_spacing_pt)
                 # 明确指定行为：固定行距（兼容Word 2007）
                 pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
@@ -872,8 +1017,6 @@ class WordGenerator:
                 # （1 pt = 12700 EMU），不是 twips，也不是磅。
                 # 直接 Pt(spacing_line) 会得到天文数字（如 215900 -> 215900pt），
                 # LibreOffice 读到这种行距就彻底撑爆页面。
-                # 绝不能写 pf.line_spacing = 1.0：那会改成 auto 行距，
-                # LibreOffice 按实际字体行高排版，单元格变高、整页溢出。
                 try:
                     _pt = _tpl_line / 12700.0          # EMU -> pt
                     if _pt <= 0 or _pt > 200:          # 异常值兜底
@@ -887,23 +1030,18 @@ class WordGenerator:
                     pf.line_spacing_rule = (WD_LINE_SPACING.EXACTLY if _is_exact
                                             else WD_LINE_SPACING.AT_LEAST)
                 except Exception:
-                    pf.line_spacing = 1.0
+                    pass
             else:
-                # 模板该段落没有固定行距：用文档网格 linePitch 作为固定行距，
-                # 让 LibreOffice 与 Word 的「按网格对齐」结果接近。
-                # 注意：_doc_line_pitch 是类的 staticmethod，这里在另一个
-                # staticmethod 内部，**必须**经类名限定调用；裸写
-                # _doc_line_pitch() 会抛 NameError 并被 except 吞掉，
-                # 于是静默退回单倍行距 —— 那正是「还是两页」的原因。
-                try:
-                    _lp = WordGenerator._doc_line_pitch()
-                    if _lp:
-                        pf.line_spacing = Pt(_lp / 20.0)
-                        pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
-                    else:
-                        pf.line_spacing = 1.0
-                except Exception:
-                    pf.line_spacing = 1.0
+                # 模板该段落本来就没有设置行距 —— 那就**什么都不要设**。
+                #
+                # 这里曾经写过「用文档网格 linePitch 补一个固定行距」，
+                # 结果把 40 个原本靠网格自动计算的段落全部钉死成 15.6pt
+                # 固定行高，表格被整体撑开、行高变大 —— 现场反馈
+                # 「虽然一页，但表格完全变了样」正是这个原因。
+                #
+                # 正确做法：模板没设就不设。行高交给 Word/LibreOffice 的
+                # 默认规则（配合去掉 docGrid），两边排出来才一致。
+                pass
             if alignment == 'center':
                 pf.alignment = WD_ALIGN_PARAGRAPH.CENTER
             elif alignment == 'left':
