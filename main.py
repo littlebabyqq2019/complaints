@@ -697,17 +697,92 @@ _KEEP_DOCGRID = (os.environ.get('COMPLAINTS_KEEP_DOCGRID', '').strip() == '1')
 
 # 删网格时给「无 trHeight」的行补的最小行高（twips）。
 # 取网格行距 linePitch 的 2 倍：模板 linePitch=312，312*2=624，
-# 实测 Word 下这类行高约 640~650 twips，取 640 最贴合（误差 <1px）。
+# 实测 Word 下这类行高约 640~650 twips，取 640 最贴合。
 _GRID_ROW_HEIGHT_TWIPS = 640
 _GRID_ROW_HEIGHT_ALT = 650      # 行内含较大字号时用略高值（避免文字被压）
 
 # 表格外段落的垂直间距补偿（twips）。
-# 依据：用 Word（COM）导出基准 PDF，与 LibreOffice 输出逐项比对后标定。
-#   Word 基准 : 顶留白 83.5pt / 标题→表格 27.5pt / 表格顶 132.0pt
-#   未补偿时  : 顶留白 78.5pt / 标题→表格 19.0pt / 表格顶 118.5pt
-# 补偿后与 Word 完全一致：顶留白 83.5 / 标题→表格 27.5 / 表格顶 132.0。
-_TITLE_BEFORE_TWIPS = 100       # 标题段前 5pt（补顶部留白差）
-_SPACER_LINE_TWIPS = 430        # 标题与表格之间空行的行高（补间距差）
+# 依据：Windows 上用 Word COM 导出基准 PDF 标定。
+#
+# ⚠ 重要：这些是「Windows + LibreOfficeKit」上标定的值，
+#   麒麟上的 LibreOffice 6.4.7 渲染略有不同，现场实测会整体偏下：
+#     表格上沿 +1mm、表格下沿 +2mm（即表格本身高 1mm）、备注 +5mm
+#   因此这三个值**可在 AppData/config.json 里覆盖**，现场用
+#   校准工具（或手工填）调整，不必改代码重新打包。
+_DEFAULT_TITLE_BEFORE = 100     # 标题段前 5pt
+_DEFAULT_SPACER_LINE = 430      # 标题与表格之间空行的行高
+_DEFAULT_ROW_HEIGHT = 640       # 表格中补出来的行高
+_DEFAULT_NOTE_GAP = 0           # 表格后「备注」段前额外间距（默认不加）
+
+# 实际生效值（启动时由 _load_layout_tuning 从配置覆盖）
+_TITLE_BEFORE_TWIPS = _DEFAULT_TITLE_BEFORE
+_SPACER_LINE_TWIPS = _DEFAULT_SPACER_LINE
+_NOTE_GAP_TWIPS = _DEFAULT_NOTE_GAP
+
+
+def _load_layout_tuning():
+    """
+    从 AppData/config.json 读取版式微调参数（可选）。
+
+    支持的键（单位都是 twips，1mm ≈ 56.7）：
+        layout_title_before   标题段前距
+        layout_spacer_line    标题与表格之间空行的行高
+        layout_row_height     表格中补出的行高
+        layout_note_gap       表格后「备注」段前额外间距
+
+    现场如果发现整体偏下/偏上，只改这几个数字即可，不必重新打包。
+    """
+    global _TITLE_BEFORE_TWIPS, _SPACER_LINE_TWIPS
+    global _GRID_ROW_HEIGHT_TWIPS, _GRID_ROW_HEIGHT_ALT, _NOTE_GAP_TWIPS
+    # 每次调用都从默认值重新算，避免上一次的值残留
+    _TITLE_BEFORE_TWIPS = _DEFAULT_TITLE_BEFORE
+    _SPACER_LINE_TWIPS = _DEFAULT_SPACER_LINE
+    _GRID_ROW_HEIGHT_TWIPS = _DEFAULT_ROW_HEIGHT
+    _GRID_ROW_HEIGHT_ALT = max(_GRID_ROW_HEIGHT_ALT, _DEFAULT_ROW_HEIGHT)
+    _NOTE_GAP_TWIPS = _DEFAULT_NOTE_GAP
+    try:
+        cfg_path = get_appdata_path('config.json')
+        if not os.path.isfile(cfg_path):
+            return
+        with open(cfg_path, 'r', encoding='utf-8-sig') as f:
+            cfg = json.load(f)
+    except Exception:
+        return
+
+    def _num(key, cur):
+        try:
+            v = cfg.get(key)
+            if v is None:
+                return cur
+            return int(float(v))
+        except Exception:
+            return cur
+
+    _TITLE_BEFORE_TWIPS = _num('layout_title_before', _DEFAULT_TITLE_BEFORE)
+    _SPACER_LINE_TWIPS = _num('layout_spacer_line', _DEFAULT_SPACER_LINE)
+    _GRID_ROW_HEIGHT_TWIPS = _num('layout_row_height', _DEFAULT_ROW_HEIGHT)
+    if _GRID_ROW_HEIGHT_ALT < _GRID_ROW_HEIGHT_TWIPS:
+        _GRID_ROW_HEIGHT_ALT = _GRID_ROW_HEIGHT_TWIPS
+    # 备注偏下时 note_gap 会是负数；段前距不能为负，改用「表格行高再压缩」
+    # 的方式抵消（见 _load_layout_tuning 里的 _EXTRA_ROW_SHRINK 处理）。
+    _NOTE_GAP_TWIPS = _num('layout_note_gap', _DEFAULT_NOTE_GAP)
+    if _NOTE_GAP_TWIPS < 0:
+        # 把负的间距折算成每行再压多少（10 行），并清零段前距
+        shrink = int(round((-_NOTE_GAP_TWIPS) / 10.0))
+        _GRID_ROW_HEIGHT_TWIPS = max(300, _GRID_ROW_HEIGHT_TWIPS - shrink)
+        if _GRID_ROW_HEIGHT_ALT < _GRID_ROW_HEIGHT_TWIPS:
+            _GRID_ROW_HEIGHT_ALT = _GRID_ROW_HEIGHT_TWIPS
+        _NOTE_GAP_TWIPS = 0
+
+
+def layout_tuning():
+    """当前生效的版式微调值（供诊断/日志使用）。"""
+    return {
+        'layout_title_before': _TITLE_BEFORE_TWIPS,
+        'layout_spacer_line': _SPACER_LINE_TWIPS,
+        'layout_row_height': _GRID_ROW_HEIGHT_TWIPS,
+        'layout_note_gap': _NOTE_GAP_TWIPS,
+    }
 
 
 def _compensate_outer_spacing(xml):
@@ -778,10 +853,32 @@ def _compensate_outer_spacing(xml):
 
         return re.sub(r'<w:p\b(?:(?!</w:p>).)*</w:p>', f, seg, flags=re.S), changed[0]
 
-    # 只处理标题段 + 表格前的空段落
+    def _fix_note(seg):
+        """
+        表格后第一个段落（通常是「备注」）补段前距，用于修正
+        「备注整体偏下」的情况。值为 0 时不改（默认）。
+        """
+        if not _NOTE_GAP_TWIPS:
+            return seg
+
+        def f(m):
+            p = m.group(0)
+            if '<w:spacing' in p and 'w:before' in p:
+                return p
+            sp = '<w:spacing w:before="%d"/>' % _NOTE_GAP_TWIPS
+            if '<w:spacing' in p:
+                return re.sub(r'<w:spacing\b', '<w:spacing w:before="%d"' %
+                              _NOTE_GAP_TWIPS, p, count=1)
+            if '<w:pPr>' in p:
+                return p.replace('<w:pPr>', '<w:pPr>' + sp, 1)
+            return p.replace('<w:p>', '<w:p><w:pPr>' + sp + '</w:pPr>', 1)
+        return re.sub(r'<w:p\b(?:(?!</w:p>).)*</w:p>', f, seg, count=1, flags=re.S)
+
+    # 只处理标题段 + 表格前的空段落 + 表格后的备注段
     pre2 = _fix_first_paragraph(pre)
     pre2, n2 = _fix_spacers(pre2)
-    return pre2 + mid + post, n2
+    post2 = _fix_note(post)
+    return pre2 + mid + post2, n2
 
 
 def _strip_docgrid_in_xml(xml, fix_row_heights=True):
@@ -916,6 +1013,8 @@ class WordGenerator:
         os.makedirs(self.output_dir, exist_ok=True)
         # 读取模板的网格行距（docGrid linePitch），供固定行距兜底使用
         _detect_doc_line_pitch(self.template_path)
+        # 读取现场版式微调参数（AppData/config.json 里的 layout_* 键）
+        _load_layout_tuning()
     
     @staticmethod
     def _doc_line_pitch():
