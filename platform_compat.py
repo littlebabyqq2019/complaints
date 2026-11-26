@@ -346,6 +346,8 @@ def _pick_produced(work_dir, before, ext):
 _LAST_CONVERT_ERROR = ['']
 _LAST_PAGE_WARNING = ['']
 _LAST_ROW_CLIP = ['']
+# Word COM 自己报告的页数（Windows 下是权威值）；None 表示未取到
+_LAST_WORD_PAGES = [None]
 # LibreOffice 本机是否「自身损坏」（缺符号/缺库），一旦确认就不再重试
 _LO_BROKEN = ['']
 
@@ -550,11 +552,87 @@ def row_clip_warning():
     return _LAST_ROW_CLIP[0]
 
 
+def _windows_word_to_pdf(word_path, out_pdf_path):
+    """
+    Windows：直接用 Word COM 导出 PDF（页面与 Word 完全一致）。
+
+    为什么不用 docx2pdf：
+      docx2pdf 内部也是调 Word COM，但它是黑盒 —— 出错时只知道失败，
+      不知道原因；而且它会对文件做额外处理。直接用 COM 可以：
+        · 精确控制 ExportAsFixedFormat（Word 原生导出，保真度最高）
+        · 拿到 Word 自己计算的页数用于校验
+        · 失败时拿到真实的 COM 异常信息
+    实测：带 '#' 的文件名（投诉批办单#C-26-113.docx）用 COM 直接导出正常。
+
+    没有装 Word 时退回 docx2pdf（它可能借助 WPS 的兼容接口）。
+    返回 True 表示成功产出 PDF。
+    """
+    import os
+
+    # 1) 优先 Word.Application（微软 Word）
+    # 2) 其次 KWPS.Application（WPS 提供 Word 兼容 COM 接口，实测可用）
+    last_err = ''
+    for progid in ('Word.Application', 'KWPS.Application'):
+        try:
+            import win32com.client
+        except Exception as e:
+            last_err = 'pywin32 不可用: %s' % e
+            break
+        app = None
+        try:
+            app = win32com.client.Dispatch(progid)
+            try:
+                app.Visible = False
+            except Exception:
+                pass
+            try:
+                app.DisplayAlerts = 0
+            except Exception:
+                pass
+            doc = app.Documents.Open(word_path, False, True)  # ReadOnly
+            try:
+                # 17 = wdExportFormatPDF（Word 原生 PDF 导出）
+                doc.ExportAsFixedFormat(out_pdf_path, 17)
+            except Exception:
+                # 个别版本只支持 SaveAs
+                doc.SaveAs(out_pdf_path, FileFormat=17)
+            try:
+                pages = int(doc.ComputeStatistics(2))  # wdStatisticPages
+                _LAST_WORD_PAGES[0] = pages
+            except Exception:
+                _LAST_WORD_PAGES[0] = None
+            doc.Close(False)
+            if os.path.isfile(out_pdf_path) and os.path.getsize(out_pdf_path) > 0:
+                return True
+            last_err = '%s 未产出 PDF' % progid
+        except Exception as e:
+            last_err = '%s: %s' % (progid, e)
+        finally:
+            if app is not None:
+                try:
+                    app.Quit()
+                except Exception:
+                    pass
+
+    # 3) 最后退回 docx2pdf
+    try:
+        from docx2pdf import convert
+        convert(word_path, out_pdf_path)
+        if os.path.isfile(out_pdf_path) and os.path.getsize(out_pdf_path) > 0:
+            return True
+        last_err = (last_err + ' / docx2pdf 未产出').strip(' /')
+    except Exception as e:
+        last_err = (last_err + ' / docx2pdf: ' + str(e)).strip(' /')
+
+    _LAST_CONVERT_ERROR[0] = last_err or 'Windows 下无法用 Word 导出 PDF'
+    return False
+
+
 def word_to_pdf(word_path, out_pdf_path=None):
     """
     Word -> PDF。
-      Windows: docx2pdf（原逻辑）
-      Linux  : LibreOffice 优先（唯一可靠），WPS 兜底，unoconv 最后
+      Windows: Word COM 原生导出（页面与 Word 完全一致）
+      Linux  : LibreOffice 优先，WPS 兜底，unoconv 最后
     成功返回 PDF 路径，失败返回 None；失败原因见 last_convert_error()。
     页数变化会写入 _LAST_PAGE_WARNING（见 page_warning()）。
     固定行高可能裁切内容时写入 _LAST_ROW_CLIP（见 row_clip_warning()）。
@@ -569,14 +647,14 @@ def word_to_pdf(word_path, out_pdf_path=None):
     _LAST_PAGE_WARNING[0] = ''
 
     if IS_WINDOWS:
-        try:
-            from docx2pdf import convert
-            convert(word_path, out_pdf_path)
-            if os.path.isfile(out_pdf_path) and os.path.getsize(out_pdf_path) > 0:
-                return out_pdf_path
-            _LAST_CONVERT_ERROR[0] = 'docx2pdf 未生成 PDF（请确认已安装 Word）'
-        except Exception as e:
-            _LAST_CONVERT_ERROR[0] = 'docx2pdf 失败: %s' % e
+        # Windows：用 Word COM 原生导出，页面与 Word 完全一致。
+        # 这是唯一能保证「转 PDF 后版式不变」的方式（Word 自己排版自己导出）。
+        if _windows_word_to_pdf(word_path, out_pdf_path):
+            # Word 自己算的页数就是基准，无需再与 app.xml 比对
+            _LAST_PAGE_WARNING[0] = ''
+            _LAST_ROW_CLIP[0] = _check_row_clipping(word_path)
+            return out_pdf_path
+        # COM 失败（没装 Word/WPS）才落到下面的 LibreOffice 通路
 
     # 1) LibreOffice（安全名副本 + 产物扫描）
     pdf = _try_soffice(word_path, None, 'pdf')
