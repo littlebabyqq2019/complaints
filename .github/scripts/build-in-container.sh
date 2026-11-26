@@ -109,68 +109,85 @@ if [ "${SELFTEST_RC}" -ne 0 ]; then
 fi
 echo "=== 产物自检通过 ==="
 
-# ---------- 5c. 用系统库替换 _internal 里的旧 freetype / fontconfig ----------
-# 背景：Pillow 等依赖把旧版 libfreetype.so.6 / libfontconfig.so.1 打进
-# _internal。PyInstaller 用 LD_LIBRARY_PATH 指向该目录，我们启动的 soffice
-# 子进程继承后加载到旧 freetype，而系统 libcairo 需要 FT_Done_MM_Var
-# （旧 freetype 没有）—— 报 symbol lookup error，打印/转 PDF 全挂。
+# ---------- 5c. freetype / fontconfig 的说明与校验 ----------
+# 背景：Pillow 等依赖把 libfreetype.so.6 / libfontconfig.so.1 打进 _internal，
+# PyInstaller 用 LD_LIBRARY_PATH 指向该目录，soffice 子进程继承后可能加载到
+# 这里的 freetype。若该 freetype 缺 FT_Done_MM_Var，系统 libcairo 就报
+# symbol lookup error（麒麟现场打印失败的根因）。
 #
-# 为什么不用 spec 的排除规则：PyInstaller 的依赖库是成套改名的
-# （libxcb-<hash>.so.x），删掉会打断依赖链导致产物起不来（已实测崩过）。
-# 而且 Tk 的字体栈本身就要 freetype/fontconfig。
+# 尝试过的两种构建期方案都不行：
+#   a) spec 里排除 -> PyInstaller 依赖库成套改名（libxcb-<hash>.so.x），
+#      删掉会断链，产物启动报 ImportError（已实测崩过）
+#   b) 用构建机的系统库替换 -> 本容器是 ubuntu:18.04，其 freetype 是 2.8.1，
+#      **比打包进来的还旧**，同样没有 FT_Done_MM_Var（实测校验失败）
 #
-# 所以采用「替换」而不是「删除」：保留文件名与 hashed 名不变，只把内容
-# 换成构建机上的系统版本（glibc 基线容器里的 freetype 含所需符号）。
-#
-# 若构建机没有同名系统库，则跳过并给出提示，不影响构建。
-echo "=== 用系统库替换 _internal 内的 freetype / fontconfig ==="
-REPLACED=0
-for f in "${DIST_DIR}/_internal"/libfreetype*.so* "${DIST_DIR}/_internal"/libfontconfig*.so*; do
-    [ -e "$f" ] || continue
-    base=$(basename "$f")
-    # 去掉 PyInstaller 加的 hash 段：libfreetype-e3eca772.so.6.20.1 -> libfreetype.so.6
-    plain=$(echo "$base" | sed -E 's/^lib(freetype|fontconfig)-[0-9a-f]+\.so/lib\1.so/')
-    # 库族名（libfreetype / libfontconfig），用于最后的模糊兜底
-    fam=$(echo "$base" | sed -E 's/^(-?lib(freetype|fontconfig)).*/\1/')
-    syslib=""
-    for cand in "/lib/$(uname -m)-linux-gnu/$plain" \
-                "/usr/lib/$(uname -m)-linux-gnu/$plain" \
-                "/lib/$plain" "/usr/lib/$plain"; do
-        if [ -f "$cand" ]; then syslib="$cand"; break; fi
-    done
-    # 再按 soname 模糊找（版本号可能略有不同）
-    if [ -z "$syslib" ]; then
-        syslib=$(ls /lib/*-linux-gnu/${plain%.so*}*.so.* 2>/dev/null | head -1 || true)
-    fi
-    # 最后按库族名兜底：系统里任意 libfreetype.so.* 都算
-    if [ -z "$syslib" ] && [ -n "$fam" ]; then
-        syslib=$(ls /lib/*-linux-gnu/${fam}.so* /usr/lib/*-linux-gnu/${fam}.so* \
-                       /lib/${fam}.so* /usr/lib/${fam}.so* 2>/dev/null | head -1 || true)
-    fi
-    if [ -n "$syslib" ] && [ -f "$syslib" ]; then
-        cp -f "$syslib" "$f"
-        echo "    替换 $base  <-  $syslib"
-        REPLACED=$((REPLACED + 1))
+# 因此采取两条真正有效的措施：
+#   1) 运行期 print_env.clean_env()（本项目的核心修复）：
+#      所有外部子进程（soffice/wps/lp/fc-list…）启动前剔除 _internal 路径，
+#      强制使用**目标机自己的**系统库 —— 麒麟装的是 2.10.1，含所需符号。
+#      这与构建机的字体版本无关，是根治手段。
+#   2) 构建期只做「体检」，不替换：
+#      记录容器 freetype 版本供排查；若容器 freetype 恰好含该符号则更好，
+#      但不强求（不强求才不会误杀构建）。
+echo "=== freetype / fontconfig 体检（仅记录，不替换）==="
+CONTAINER_FT=$(ls /usr/lib/*-linux-gnu/libfreetype.so.6 /lib/*-linux-gnu/libfreetype.so.6 2>/dev/null | head -1 || true)
+if [ -n "${CONTAINER_FT}" ]; then
+    echo "    构建机 freetype: ${CONTAINER_FT}"
+    if nm -D "${CONTAINER_FT}" 2>/dev/null | grep -q FT_Done_MM_Var \
+       || strings -a "${CONTAINER_FT}" 2>/dev/null | grep -q FT_Done_MM_Var; then
+        echo "    含 FT_Done_MM_Var"
     else
-        echo "    (跳过) $base 未找到对应系统库 $plain"
+        # 这是预期情况（ubuntu 18.04 的 freetype 2.8.1 没有该符号），
+        # 不影响发布：运行期会剔除 _internal 让子进程用目标机系统库。
+        echo "    不含 FT_Done_MM_Var（构建机较旧，属正常）"
+        echo "    -> 由运行期 print_env.clean_env() 保证外部程序使用目标机系统库"
     fi
-done
-if [ "${REPLACED}" -gt 0 ]; then
-    echo "OK   已用系统库替换 ${REPLACED} 个文件"
 else
-    echo "提示 _internal 内没有需要替换的 freetype/fontconfig"
+    echo "    未找到构建机 freetype（不阻断构建）"
 fi
-# 校验：替换后 _internal 里的 freetype 必须含 FT_Done_MM_Var
-FT_CHECK=$(find "${DIST_DIR}/_internal" -maxdepth 1 -name 'libfreetype*.so*' | head -1)
-if [ -n "${FT_CHECK}" ]; then
-    if nm -D "${FT_CHECK}" 2>/dev/null | grep -q FT_Done_MM_Var \
-       || strings -a "${FT_CHECK}" 2>/dev/null | grep -q FT_Done_MM_Var; then
-        echo "OK   _internal 内的 freetype 含 FT_Done_MM_Var"
-    else
-        echo "!! _internal 内的 freetype 仍缺 FT_Done_MM_Var，soffice 会启动失败" >&2
-        echo "   文件: ${FT_CHECK}" >&2
-        exit 1
-    fi
+# 确认打包产物里确实带了 freetype（否则说明 Tk 字体栈可能不完整）
+if find "${DIST_DIR}/_internal" -maxdepth 1 -name 'libfreetype*.so*' | grep -q .; then
+    echo "OK   _internal 内含 freetype（Tk/Pillow 依赖完整）"
+else
+    echo "提示 _internal 内没有 freetype（可能由系统提供）"
+fi
+
+# ---------- 5d. 验证运行期库隔离真的生效 ----------
+# 这是本项目修复 FT_Done_MM_Var 的核心机制，必须在 CI 里真实跑一遍：
+# 模拟 PyInstaller 的 LD_LIBRARY_PATH 污染，然后确认 print_env.clean_env()
+# 产生的环境里不含 _internal，且用它启动外部程序能正常工作。
+echo "=== 验证 print_env 库隔离（模拟打包版污染）==="
+python3.10 - <<'PY'
+import os, sys, subprocess
+sys.path.insert(0, '/src')
+import print_env
+
+fake_internal = '/src/dist/投诉批办单管理系统/_internal'
+saved = dict(os.environ)
+try:
+    os.environ['LD_LIBRARY_PATH'] = fake_internal
+    sys._MEIPASS = fake_internal
+    sys.frozen = True
+    env = print_env.clean_env()
+    lp = env.get('LD_LIBRARY_PATH', '')
+    assert '_internal' not in lp, 'clean_env 未剔除 _internal: %r' % lp
+    print('  OK    clean_env 已剔除 _internal（LD_LIBRARY_PATH=%r）' % lp)
+
+    # 用清理后的环境启动一个真实系统程序，确认能跑
+    r = subprocess.run(['fc-list', ':', 'family'], env=env,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    assert r.returncode == 0, 'fc-list 在清理环境下失败: %s' % r.stderr[:200]
+    fams = r.stdout.decode('utf-8', 'ignore')
+    print('  OK    fc-list 正常（读到 %d 行字体）' % len(fams.splitlines()))
+finally:
+    os.environ.clear(); os.environ.update(saved)
+    if hasattr(sys, '_MEIPASS'): del sys._MEIPASS
+    if hasattr(sys, 'frozen'): del sys.frozen
+print('  OK    运行期库隔离验证通过')
+PY
+if [ $? -ne 0 ]; then
+    echo "!! print_env 库隔离验证失败，产物不可发布" >&2
+    exit 1
 fi
 
 # ---------- 6. 校验产物架构与最高 GLIBC 符号版本 ----------
