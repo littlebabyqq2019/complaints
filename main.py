@@ -763,15 +763,16 @@ def _load_layout_tuning():
     _GRID_ROW_HEIGHT_TWIPS = _num('layout_row_height', _DEFAULT_ROW_HEIGHT)
     if _GRID_ROW_HEIGHT_ALT < _GRID_ROW_HEIGHT_TWIPS:
         _GRID_ROW_HEIGHT_ALT = _GRID_ROW_HEIGHT_TWIPS
-    # 备注偏下时 note_gap 会是负数；段前距不能为负，改用「表格行高再压缩」
-    # 的方式抵消（见 _load_layout_tuning 里的 _EXTRA_ROW_SHRINK 处理）。
+    # layout_note_gap：备注段的段前距，**正数 = 备注下移**，负数 = 备注上移。
+    #
+    # 修正说明（2026-11-27）：早先把负数折算成「压缩表格行高」是错的。
+    # 备注在表格下方，压表格只会让表格变矮、备注跟着上移，方向反了；
+    # 而且备注偏下时 note_gap 反而算成负值，语义也反。
+    # 现在语义统一为：正值加大段前距（下移），负值减小（上移）。
+    # 段前距本身不能为负，所以下限夹到 0；需要上移超过 0 时，
+    # 用 layout_row_height 或 layout_spacer_line 去调整（那些是上方的间距）。
     _NOTE_GAP_TWIPS = _num('layout_note_gap', _DEFAULT_NOTE_GAP)
     if _NOTE_GAP_TWIPS < 0:
-        # 把负的间距折算成每行再压多少（10 行），并清零段前距
-        shrink = int(round((-_NOTE_GAP_TWIPS) / 10.0))
-        _GRID_ROW_HEIGHT_TWIPS = max(300, _GRID_ROW_HEIGHT_TWIPS - shrink)
-        if _GRID_ROW_HEIGHT_ALT < _GRID_ROW_HEIGHT_TWIPS:
-            _GRID_ROW_HEIGHT_ALT = _GRID_ROW_HEIGHT_TWIPS
         _NOTE_GAP_TWIPS = 0
 
 
